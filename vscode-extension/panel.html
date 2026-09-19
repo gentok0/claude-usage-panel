@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    color-scheme: light dark;
+    /* Every data column is as wide as its own widest value: nothing is squeezed,
+       and what does not fit the window leaves through the horizontal scroll. Only
+       the two text columns have a set width, because only they may be shortened. */
+    --w-name: 30ch;
+    --money-w: 9ch;
+    --fg: var(--vscode-foreground, #333);
+    --line-col: color-mix(in srgb, var(--fg) 22%, transparent);
+    --line-row: color-mix(in srgb, var(--fg) 34%, transparent);
+    --line-thread: color-mix(in srgb, var(--fg) 52%, transparent);
+    --bg: var(--vscode-panel-background, var(--vscode-editor-background, #fff));
+    --accent: var(--vscode-charts-blue, #1a85ff);
+    --miss: #C25E00;
+  }
+  body.vscode-dark, body.vscode-high-contrast { --miss: #FFA657; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; flex-direction: column; overflow: hidden;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--vscode-editor-font-size, 13px);
+    color: var(--fg);
+    background: var(--bg);
+  }
+  header { flex: none; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 8px 10px 6px; }
+  .muted { color: var(--vscode-descriptionForeground); }
+  label.f { display: flex; align-items: center; gap: 4px; }
+  label.f span { color: var(--vscode-descriptionForeground); }
+  select, input {
+    font: inherit; color: var(--fg);
+    background: var(--vscode-dropdown-background, transparent);
+    border: 1px solid var(--vscode-dropdown-border, var(--line-col)); border-radius: 4px; padding: 1px 4px;
+  }
+  input { min-width: 11em; }
+
+  /* No padding on the right: the pinned column sticks to the very edge of the
+     scrollport, and any padding there becomes a slit with the scrolling columns
+     showing through it. The gap is given back inside the pinned cell. */
+  .scroll { flex: 1; overflow: auto; padding: 0 0 10px 10px; }
+  .rows {
+    display: grid; width: max-content; min-width: 100%;
+    grid-template-columns:
+      max-content var(--w-name) repeat(8, max-content) max-content;
+  }
+  .rows.with-input { grid-template-columns: max-content var(--w-name) repeat(9, max-content) max-content; }
+
+  /* Cells sit inside the rows, and a row with display:contents passes on nothing
+     but inherited properties — so padding and borders belong to the cells. Cells
+     stretch to the full row height, otherwise per-cell borders start at different
+     heights and the rules walk down the table like a staircase. */
+  .rows > *, .tr > *, .qr > *, .hr > * { padding: 3px .9ch; white-space: nowrap; }
+  .tr > * + *, .qr > * + *, .hr > * + * { border-left: 1px dashed var(--line-col); }
+
+  /* No bottom border here: the row below already draws one, and two borders meeting
+     in a grid do not collapse — they add up into a rule twice as thick. */
+  .hr > * {
+    position: sticky; top: 0; z-index: 2; background: var(--bg);
+    font-weight: 700; color: var(--vscode-descriptionForeground); padding-bottom: 4px;
+  }
+  .tr, .qr, .hr { display: contents; }
+  .tr { cursor: pointer; }
+  .tr > * { border-top: 2px solid var(--line-thread); padding-top: 5px; padding-bottom: 5px; }
+  .qr > * { border-top: 1px solid var(--line-row); padding-top: 6px; padding-bottom: 6px; }
+  /* The first request repeats the thread's own rule, so the block has a visible edge. */
+  .qr.first > * { border-top: 2px solid var(--line-thread); }
+
+  /* The caption is the only place text may be cut, and it is cut at exactly two
+     lines: the box is two lines tall and the clamp puts the ellipsis on the second. */
+  .name { overflow: hidden; text-overflow: ellipsis; }
+  .tr .name { font-weight: 700; }
+  .qr .name { font-style: italic; white-space: normal; line-height: 1.4em; height: 2.8em; }
+  /* The clamp has to sit on a plain element: a grid item does not honour it. */
+  .qr .name .clip {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; line-height: 1.4em;
+  }
+  /* The caption opens by a click on itself, and the whole message unfolds across
+     the table width — inside a thirty-character column a long message is unreadable.
+     Selecting text must keep working, so the click only toggles when nothing was
+     selected, and the unfolded text is not a click target at all. */
+  .qr .name { cursor: pointer; }
+  .qr .name:hover { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .12)); }
+  .qr .name.open { font-weight: 700; }
+  .qt { grid-column: 2 / -1; white-space: pre-wrap; font-style: italic;
+    padding: 2px .9ch 10px; line-height: 1.45; max-width: 110ch;
+    border-left: 1px dashed var(--line-col); }
+
+  /* The table column stays against the right edge while everything else scrolls
+     sideways under it — it is the one number that must never leave the screen. */
+  .col-table { position: sticky; right: 0; background: var(--bg); border-left: 1px solid var(--line-row); padding-right: 10px; }
+  .hr .col-table { z-index: 3; }
+
+  /* Итоговые строки: те же колонки, что у тредов, чтобы цифры сравнивались по
+     вертикали. Черта сверху отделяет итог от выборки, вес растёт с уровнем. */
+  .tot { display: contents; }
+  .tot > * { border-top: 2px solid var(--line-thread); padding: 6px .9ch 8px; font-weight: 700; }
+  .tot > * + * { border-left: 1px dashed var(--line-col); }
+  .tot .num b { font-weight: 700; }
+  .tot.grand > * { border-top: 3px double var(--line-thread); font-size: 1.1em; padding-top: 8px; }
+  .tot .lbl { white-space: nowrap; }
+
+  /* Заголовок проекта — не строка таблицы, а её титул: во всю ширину, у левого
+     края, без вертикальных разделителей, которые иначе торчали бы выше шапки. */
+  .gr { grid-column: 1 / -1; padding: 18px 0 7px; font-weight: 700; font-size: 1.2em; }
+  .rows > .gr:first-child { padding-top: 4px; }
+  /* Тот же воздух, что между проектами, — чтобы общий итог не читался как часть
+     последней группы. */
+  .gap { grid-column: 1 / -1; height: 14px; }
+
+  /* Деньги растут вместе с уровнем: запрос < тред < проект < вся выборка. */
+  .sum { text-align: right; font-weight: 700; }
+  .tr .sum { font-size: 1.15em; }
+  .qr .sum { font-size: 1em; }
+  .tot .sum { font-size: 1.3em; }
+  .tot.grand .sum { font-size: 1.5em; }
+  .num { color: var(--vscode-descriptionForeground); }
+  .num b { font-weight: 400; color: var(--fg); }
+  .top b { color: var(--accent); font-weight: 700; }
+  .miss { color: var(--miss); font-weight: 700; }
+  .warn { color: var(--vscode-charts-red, #e51400); }
+  /* Индикатор заполнения с процентом внутри, как шкала заряда: так процент не
+     занимает отдельного места в строке. Заливка полупрозрачная, текст поверх своим
+     цветом — иначе цифры тонут то на заполненной части, то на пустой. */
+  .gauge {
+    position: relative; display: inline-block; width: 7ch; height: 1.3em;
+    vertical-align: -0.3em; border-radius: 3px; overflow: hidden;
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+  .gauge::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--f);
+    background: color-mix(in srgb, currentColor 55%, transparent);
+  }
+  .gauge i {
+    position: relative; display: block; text-align: center; font-style: normal;
+    font-weight: 700; color: var(--fg); font-size: .9em; line-height: 1.45em;
+  }
+  .more { grid-column: 2 / -1; padding: 5px .9ch 9px; }
+  .more button { font: inherit; color: var(--vscode-textLink-foreground); background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; }
+  .empty { padding: 12px 0; color: var(--vscode-descriptionForeground); }
+</style>
+</head>
+<body>
+<header>
+  <label class="f"><span>область</span><select id="scope"><option value="0">текущий проект</option><option value="1">все проекты</option></select></label>
+  <label class="f"><span>период</span><select id="period"></select></label>
+  <label class="f"><span>поиск</span><input id="search" type="search" placeholder="тред или текст"></label>
+</header>
+<div class="scroll"><div class="rows" id="list"></div></div>
+
+<script>
+const vscode = acquireVsCodeApi();
+const PERIODS = [['сегодня', 1], ['вчера и сегодня', 2], ['7 дней', 7], ['30 дней', 30], ['всё время', 0]];
+
+// Calendar days, not a rolling 24 hours: "today" means since midnight, otherwise a
+// thread started yesterday evening falls entirely into "today" and periods look equal.
+function windowStart(days) {
+  if (!days) return 0;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime() - (days - 1) * 86400e3;
+}
+// Titles live in the header row, so a cell carries only its numbers.
+const ARTICLES = [
+  ['чтение', 'cacheRead', 'usdCacheRead'],
+  ['запись', 'write', 'usdWrite'],
+  ['генерация', 'answer', 'usdAnswer'],
+  ['размышления', 'thinking', 'usdThinking'],
+  ['свежий вход', 'input', 'usdInput'],
+];
+const HEAD = ['', 'название треда', 'траты', 'дата', 'кеш до', 'модель', 'чтение', 'запись', 'генерация', 'размышления', 'свежий вход', 'стол'];
+const INPUT_MIN = 1000;
+const DASH = '<span class="num">—</span>';
+let state = { threads: [] };
+// The whole history, asked for only at "всё время": journals are wiped after 30
+// days, the archive is the copy that outlives them — and it weighs megabytes.
+let archive = null;
+let archiveAsked = false;
+let merged = null;
+let period = 2;
+// Captions opened by a click, keyed by thread and time of the request.
+const openText = new Set();
+let allProjects = false;
+let query = '';
+let showInput = false;
+const open = new Set();
+const expanded = new Set();
+
+const usd = (n) => '$' + (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2));
+const tok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K' : String(n);
+const p2 = (x) => String(x).padStart(2, '0');
+const when = (iso) => { const d = new Date(iso); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function cacheLife(lastAt) {
+  const end = new Date(lastAt).getTime() + 3600e3;
+  if (end < Date.now()) return '';
+  const d = new Date(end);
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
+function shape(t, missTokens) {
+  const think = t.output ? (t.usdOutput * t.thinking) / t.output : 0;
+  return {
+    cacheRead: t.cacheRead, usdCacheRead: t.usdCacheRead,
+    write: t.cacheWrite1h + t.cacheWrite5m, usdWrite: t.usdCacheWrite1h + t.usdCacheWrite5m,
+    answer: t.output - t.thinking, usdAnswer: t.usdOutput - think,
+    thinking: t.thinking, usdThinking: think,
+    input: t.input, usdInput: t.usdInput,
+    missTokens: missTokens || 0,
+  };
+}
+
+const missUsdOf = (missTokens) => missTokens * (10 - 0.5) / 1e6;
+
+// One cell per article, always in the same column, so rows compare vertically.
+function articleCells(s, missUsd) {
+  const max = Math.max(...ARTICLES.map(([, , m]) => s[m]));
+  return ARTICLES.map(([, k, m]) => {
+    if (k === 'input' && !showInput) return '';
+    // Fresh input below the threshold is noise; its appearance is the signal.
+    if (s[k] === 0 || (k === 'input' && s[k] <= INPUT_MIN)) return DASH;
+    const missNote = k === 'write' && missUsd > 0 ? ` <span class="miss">пром ${usd(missUsd)}</span>` : '';
+    return `<span class="num ${s[m] === max ? 'top' : ''}"><b>${tok(s[k])}/${usd(s[m])}</b>${missNote}</span>`;
+  }).join('');
+}
+
+const gauge = (pct) => `<span class="gauge" style="--f:${Math.max(0, Math.min(100, pct))}%"><i>${pct}%</i></span>`;
+
+// Насколько был полон стол в этот момент. У строки запроса это показывает рост
+// треда снизу вверх; прочерк — только когда журнал не записал значение.
+function tableCell(table, limitTokens) {
+  if (!table) return '<span class="col-table num">—</span>';
+  const pct = Math.round((table / limitTokens) * 100);
+  return `<span class="col-table muted ${pct >= 80 ? 'warn' : ''}">${gauge(pct)} ${tok(table)}/${tok(limitTokens)}</span>`;
+}
+
+// One selection for the whole panel. The period cuts by the exact time of each
+// request, the search cuts by the phrase, and every number on screen — the total,
+// the group sums, the thread row — is counted over what is left, never over more.
+// The phrase is matched whole, as a substring. A thread found by its own name keeps
+// all its requests: there the hit is the thread itself. Otherwise only the requests
+// carrying the phrase survive, and the thread is counted by them alone.
+function selection(thread, since, q) {
+  const inPeriod = thread.turns.filter((x) => !since || new Date(x.at).getTime() >= since);
+  const titleHit = !!q && (thread.title || '').toLowerCase().includes(q);
+  const turns = !q || titleHit
+    ? inPeriod
+    : inPeriod.filter((x) => (x.full || x.text || '').toLowerCase().includes(q));
+
+  const sum = shape({ cacheRead: 0, usdCacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, usdCacheWrite1h: 0, usdCacheWrite5m: 0, output: 0, thinking: 0, usdOutput: 0, input: 0, usdInput: 0 }, 0);
+  let usdTotal = 0;
+  let missTokens = 0;
+  for (const x of turns) {
+    const s = shape(x.totals, x.missTokens);
+    for (const k of Object.keys(sum)) sum[k] += s[k] || 0;
+    usdTotal += x.usd;
+    missTokens += x.missTokens || 0;
+  }
+  sum.missTokens = missTokens;
+  return { sum, usd: usdTotal, turns, matched: !q || titleHit || turns.length > 0 };
+}
+
+// A thread without a generated title is still recognisable by how it started.
+const threadName = (t) => t.title || (t.turns[0] && t.turns[0].text) || t.id.slice(0, 8);
+
+// Threads from several sources folded into one list, keyed by thread and by the
+// time of each request. Applied in order, so the window laid over the archive wins:
+// a turn still running is complete only in the journals, while everything the
+// journals have already lost lives on in the archive.
+function mergeThreads(list) {
+  const byId = new Map();
+  for (const t of list) {
+    const prev = byId.get(t.id);
+    if (!prev) { byId.set(t.id, { ...t, turns: [...t.turns] }); continue; }
+    const turns = new Map(prev.turns.map((x) => [x.at, x]));
+    for (const x of t.turns) turns.set(x.at, x);
+    const newer = (t.lastAt || '') >= (prev.lastAt || '') ? t : prev;
+    byId.set(t.id, { ...prev, ...newer, turns: [...turns.values()].sort((a, b) => (a.at < b.at ? -1 : 1)) });
+  }
+  // Freshest first, the order the builder hands the window over in.
+  return [...byId.values()].sort((a, b) => (a.lastAt < b.lastAt ? 1 : -1));
+}
+
+// The merge costs real time on a year of history, so it survives until the data
+// under it changes, not until the next click.
+function sourceThreads() {
+  if (period !== 0) return state.threads;
+  if (!archive) {
+    if (!archiveAsked) { archiveAsked = true; vscode.postMessage('archive'); }
+    return state.threads;
+  }
+  if (!merged) merged = mergeThreads([...archive, ...state.threads]);
+  return merged;
+}
+
+// Сумма по выборке тредов: статьи складываются, промахи кэша — вместе с ними.
+function sumOf(list) {
+  const acc = shape({ cacheRead: 0, usdCacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, usdCacheWrite1h: 0,
+    usdCacheWrite5m: 0, output: 0, thinking: 0, usdOutput: 0, input: 0, usdInput: 0 }, 0);
+  let usd = 0;
+  for (const t of list) {
+    for (const k of Object.keys(acc)) acc[k] += t.window.sum[k] || 0;
+    usd += t.window.usd;
+  }
+  return { sum: acc, usd };
+}
+
+// Итог в тех же колонках, что и строки выше: подпись, деньги, статьи. Дата, кеш,
+// модель и стол складывать нечего — там прочерк.
+function totalsRow(total, label, grand) {
+  const { sum } = total;
+  return `<div class="tot${grand ? ' grand' : ''}">
+    <span></span>
+    <span class="lbl">${esc(label)}</span>
+    <span class="sum">${usd(total.usd)}</span>
+    ${DASH}${DASH}${DASH}
+    ${articleCells(sum, missUsdOf(sum.missTokens))}
+    <span class="col-table num">—</span>
+  </div>`;
+}
+
+// Пустые ячейки, чтобы строка заняла всю ширину сетки: число колонок зависит от
+// того, показан ли «свежий вход».
+const cols = () => HEAD.length - (showInput ? 0 : 1);
+
+function groupRow(name) {
+  return `<div class="gr"><span>${esc(name)}</span></div>`;
+}
+
+function headerRow() {
+  return `<div class="hr">${HEAD.map((h, i) => {
+    if (i === 10 && !showInput) return '';
+    const cls = i === 11 ? ' class="col-table"' : i === 2 ? ' class="sum"' : '';
+    return `<span${cls}>${h}</span>`;
+  }).join('')}</div>`;
+}
+
+function render() {
+  const since = windowStart(period);
+  const threads = sourceThreads()
+    .map((t) => ({ ...t, window: selection(t, since, query.toLowerCase()) }))
+    .filter((t) => t.window.matched)
+    .filter((t) => t.window.usd > 0)
+    .filter((t) => allProjects || t.project === state.current);
+
+  showInput = threads.some((t) => t.window.sum.input > INPUT_MIN
+    || t.window.turns.some((x) => (x.totals.input || 0) > INPUT_MIN));
+
+  const grandTotal = sumOf(threads);
+  document.getElementById('period').innerHTML = PERIODS
+    .map(([label, days]) => `<option value="${days}" ${days === period ? 'selected' : ''}>${label}</option>`).join('');
+  document.getElementById('scope').value = allProjects ? '1' : '0';
+
+  const groups = new Map();
+  for (const t of threads) {
+    const key = allProjects ? t.projectLabel : '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+
+  // Строка проекта стоит всегда, в обоих режимах: иначе при одном проекте «текущий»
+  // и «все проекты» рисуют разные таблицы, хотя показывают одно и то же.
+  const withHeads = true;
+  // Every group carries its own column titles. They are identical and all stick to
+  // the top, so the next one covers the previous and exactly one is ever visible.
+  const html = [...groups.entries()].map(([name, list]) => {
+    const title = name || state.currentLabel || 'проект';
+    const head = (withHeads ? groupRow(title) : '') + headerRow();
+    return head + list.map(threadRows).join('') + totalsRow(sumOf(list), `Итого · ${title}`);
+  }).join('');
+  // Общий итог отделён от последней группы тем же воздухом, что стоит между
+  // проектами, — иначе читается как её продолжение. При одной группе он повторил бы
+  // строку выше цифра в цифру, поэтому не рисуется.
+  const grandRow = groups.size > 1
+    ? `<div class="gap"></div>${totalsRow(grandTotal, 'ИТОГО по выборке', true)}` : '';
+  const list = document.getElementById('list');
+  list.classList.toggle('with-input', showInput);
+  list.innerHTML = threads.length ? html + grandRow : '<div class="empty">За выбранный период ничего нет.</div>';
+}
+
+function threadRows(t) {
+  // Percent of the auto-compaction threshold, not of the raw window: that is where
+  // the conversation actually ends.
+  const isOpen = open.has(t.id);
+  const turns = t.window.turns.slice().reverse();
+  const limit = expanded.has(t.id) ? turns.length : 10;
+  const miss = missUsdOf(t.window.sum.missTokens);
+  // Строка треда описывает ВЫБОРКУ, а не тред целиком: дата, стол и его знаменатель
+  // берутся у самого свежего хода выборки — того, что стоит первой строкой под ней.
+  // Иначе под поиском по старому запросу стол продолжал бы тикать текущим ходом.
+  // Свежий ход выборки, в котором реально были запросы: ход без них не несёт ни
+  // стола, ни цены, и строка треда показывала бы по нему прочерк.
+  const top = turns.find((x) => x.requests > 0) || turns[0];
+  const at = top ? top.at : t.lastAt;
+  const limitTokens = (top && top.compactAt) || t.compactAt || t.contextSize;
+  const tableNow = top ? top.table : t.table;
+  // Срок кэша — тоже состояние выборки: под поиском по старому запросу он обязан
+  // показывать пусто (кэш того времени давно истёк), а не живой срок текущего хода.
+  const life = cacheLife(at);
+
+  const head = `<div class="tr" data-id="${t.id}">
+    <span class="caret muted">${isOpen ? '▾' : '▸'}</span>
+    <span class="name" title="${esc(threadName(t))}">${esc(threadName(t))}</span>
+    <span class="sum">${usd(t.window.usd)}</span>
+    <span class="muted">${when(at)}</span>
+    ${life ? `<span class="muted">${life}</span>` : DASH}
+    ${DASH}
+    ${articleCells(t.window.sum, miss)}
+    ${tableCell(tableNow, limitTokens)}
+  </div>`;
+
+  if (!isOpen) return head;
+
+  const rows = turns.slice(0, limit).map((x, i) => {
+    const key = `${t.id}|${x.at}`;
+    const shown = openText.has(key);
+    // Opened: the whole message and no tooltip — it would cover what was opened.
+    const tip = shown ? '' : ` title="${esc(x.full || x.text)}"`;
+    return `<div class="qr ${i === 0 ? 'first' : ''}">
+    <span></span>
+    <span class="name${shown ? ' open' : ''}" data-turn="${esc(key)}"${tip}><span class="clip">${esc(x.text)}</span></span>
+    <span class="sum">${usd(x.usd)}</span>
+    <span class="muted">${when(x.at)}</span>
+    ${DASH}
+    <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
+    ${articleCells(shape(x.totals, x.missTokens), missUsdOf(x.missTokens))}
+    ${tableCell(x.table, x.compactAt || limitTokens)}
+  </div>` + (shown ? `<div class="qt">${esc(x.full || x.text)}</div>` : '');
+  }).join('');
+
+  const more = turns.length > limit
+    ? `<div class="more"><button data-expand="${t.id}">показать все запросы (${turns.length})</button></div>` : '';
+  return head + rows + more;
+}
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'scope') { allProjects = e.target.value === '1'; render(); }
+  if (e.target.id === 'period') { period = Number(e.target.value); render(); }
+});
+document.getElementById('search').addEventListener('input', (e) => { query = e.target.value.trim(); render(); });
+
+document.addEventListener('click', (e) => {
+  const exp = e.target.closest('button[data-expand]');
+  if (exp) { expanded.add(exp.dataset.expand); render(); return; }
+  // A click that ended a selection is not a click on the caption: the person was
+  // copying the text, and opening or closing it under their hands would lose it.
+  const cap = e.target.closest('.name[data-turn]');
+  if (cap) {
+    if (!String(window.getSelection())) {
+      const key = cap.dataset.turn;
+      if (openText.has(key)) openText.delete(key); else openText.add(key);
+      render();
+    }
+    return;
+  }
+  const row = e.target.closest('.tr');
+  if (row) {
+    const id = row.dataset.id;
+    if (open.has(id)) open.delete(id); else open.add(id);
+    render();
+  }
+});
+
+window.addEventListener('message', (e) => {
+  const m = e.data;
+  if (m && m.kind === 'archive') archive = m.threads || [];
+  else state = (m && m.kind === 'live' ? m.data : m) || { threads: [] };
+  merged = null;
+  render();
+});
+vscode.postMessage('ready');
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+node_modules/
+*.log
+
+# Мусор файловых менеджеров
+.DS_Store
+Thumbs.db

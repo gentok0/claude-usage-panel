@@ -1,0 +1,7 @@
+{
+  "name": "usage-panel",
+  "version": "0.1.0",
+  "description": "Панель расхода Claude Code: сколько стоит каждый тред и каждый запрос, куда уходят деньги, что съедают промахи кэша. Считает локально по журналам сессий, наружу ничего не отправляет.",
+  "author": { "name": "Nikita Liubov" },
+  "keywords": ["usage", "cost", "tokens", "cache", "dashboard"]
+}
