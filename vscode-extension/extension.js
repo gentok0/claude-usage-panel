@@ -10,10 +10,24 @@ const MONTH_FILE = /^\d{4}-\d{2}\.json$/;
 
 function read() {
   try {
-    return JSON.parse(fs.readFileSync(DATA, 'utf8'));
+    return scoped(JSON.parse(fs.readFileSync(DATA, 'utf8')));
   } catch {
     return { threads: [], generatedAt: null };
   }
+}
+
+// Сборщик пишет один файл на все проекты и называет текущим тот, из которого
+// пришёл хук. Окно знает свою папку само — иначе в проекте, где Claude Code ещё
+// не работал, панель показывает чужой расход под подписью «текущий проект».
+function scoped(data) {
+  const folder = (vscode.workspace?.workspaceFolders || [])[0];
+  if (!folder) return data;
+  const dir = folder.uri.fsPath;
+  // Тем же способом, каким сборщик кодирует путь в имя папки журналов; регистр
+  // у той папки свой, поэтому сравнение идёт в нижнем.
+  const code = dir.replace(/[\\/:]/g, '-').toLowerCase();
+  const own = (data.threads || []).find((t) => t.project.toLowerCase() === code);
+  return { ...data, current: own ? own.project : code, currentLabel: path.basename(dir) };
 }
 
 const months = () => {
