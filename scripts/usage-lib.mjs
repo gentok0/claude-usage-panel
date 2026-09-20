@@ -10,7 +10,7 @@ const OPUS_FAST = { in: 10, w5m: 12.5, w1h: 20, read: 1, out: 50 };
 const FABLE_51 = { in: 10, w5m: 12.5, w1h: 20, read: 0.25, out: 50 };
 const FABLE_5 = { in: 10, w5m: 12.5, w1h: 20, read: 1, out: 50 };
 
-export const PRICES = {
+const DEFAULT_PRICES = {
   'claude-opus-5': { ...OPUS, fast: OPUS_FAST },
   'claude-opus-4-8': { ...OPUS, fast: OPUS_FAST },
   'claude-opus-4-7': OPUS,
@@ -27,7 +27,54 @@ export const PRICES = {
 };
 
 export const WEB_SEARCH_USD = 0.01; // $10 per 1000 searches
-export const PRICES_CHECKED = '2026-09-11';
+const DEFAULT_CHECKED = '2026-09-11';
+
+// Rates are data, not code: prices.json in the plugin data directory replaces individual
+// rows and `multiplier` applies a flat contracted discount, so refreshing them is one file
+// instead of a release. Missing or broken file -> built-in table.
+function readPricesFile() {
+  const dirs = [
+    process.env.CLAUDE_PLUGIN_DATA,
+    process.env.CLAUDE_USAGE_DIR,
+    path.join(os.homedir(), '.claude', 'usage-counter'),
+  ].filter(Boolean);
+  for (const dir of dirs) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(dir, 'prices.json'), 'utf8'));
+      if (raw && typeof raw === 'object') return raw;
+    } catch {
+      /* not here, try the next one */
+    }
+  }
+  return null;
+}
+
+function scaleRates(rates, k) {
+  const out = {};
+  for (const [field, value] of Object.entries(rates)) {
+    out[field] = field === 'fast' ? scaleRates(value, k) : value * k;
+  }
+  return out;
+}
+
+function buildPrices() {
+  const table = { ...DEFAULT_PRICES };
+  const file = readPricesFile();
+  if (!file) return { table, checked: DEFAULT_CHECKED };
+
+  for (const [model, rates] of Object.entries(file.models || {})) {
+    if (rates && typeof rates === 'object') table[model] = { ...table[model], ...rates };
+  }
+  const k = Number(file.multiplier);
+  if (k > 0 && k !== 1) {
+    for (const model of Object.keys(table)) table[model] = scaleRates(table[model], k);
+  }
+  return { table, checked: file.checked || DEFAULT_CHECKED };
+}
+
+const built = buildPrices();
+export const PRICES = built.table;
+export const PRICES_CHECKED = built.checked;
 
 // Claude Code logs local operations as "<synthetic>" records with empty usage:
 // they are not requests and must not become the model, the table or the last turn.

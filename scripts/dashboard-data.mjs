@@ -181,6 +181,10 @@ function build(currentDir) {
   const threads = [];
   const current = path.basename(currentDir);
   for (const project of fs.readdirSync(PROJECTS)) {
+    // Сверка ставок работает во временной папке и удаляет свой журнал за собой,
+    // но тик сборщика может успеть между запросом и уборкой — тогда пробная сессия
+    // осталась бы в архиве навсегда. Поэтому её проекты не считаются вовсе.
+    if (project.includes('usage-calibrate-')) continue;
     const dir = path.join(PROJECTS, project);
     let entries = [];
     try { entries = fs.readdirSync(dir); } catch { continue; }
