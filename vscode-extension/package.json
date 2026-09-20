@@ -2,7 +2,7 @@
   "name": "claude-usage-panel",
   "displayName": "Расход Claude",
   "description": "Панель расхода токенов и денег по тредам Claude Code",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "local",
   "engines": { "vscode": "^1.94.0" },
   "categories": ["Other"],

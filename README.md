@@ -21,15 +21,13 @@
 
 ## Установка
 
-Три команды, все внутри Claude Code:
+Одна строка в терминал:
 
 ```
-/plugin marketplace add gentok0/claude-usage-panel
-/plugin install usage-panel@usage-panel
-/usage-panel:install
+claude plugin marketplace add gentok0/claude-usage-panel && claude plugin install -y usage-panel@usage-panel
 ```
 
-Последняя разворачивает расширение VS Code — его плагином не доставить. Посмотреть, что она сделает, ничего не трогая: `/usage-panel:install --dry-run`.
+После установки необходимо выполнить в VS Code `Developer: Reload Window`.
 
 Требуется Node 18+ в `PATH`. Без VS Code шаг с расширением просто пропускается, скилл и данные работают.
 
@@ -78,33 +76,22 @@
 ## Как обновить
 
 ```
-/plugin marketplace update usage-panel
-/plugin update usage-panel@usage-panel
-/usage-panel:install
+claude plugin marketplace update usage-panel && claude plugin update usage-panel@usage-panel
 ```
 
-Прежние версии расширения установщик удаляет сам, чтобы в VS Code не копились дубли.
+После обновления необходимо выполнить в VS Code `Developer: Reload Window`.
 
 ## Как удалить
 
-Два режима — с данными и без.
+Одна строка — уберёт расширение, сам плагин и витрину:
 
 ```
-/usage-panel:uninstall            убрать расширение, историю расхода оставить
-/usage-panel:uninstall --data     убрать и накопленную историю
-/usage-panel:uninstall --dry-run  показать, что будет удалено, ничего не трогая
+node ~/.claude/plugins/marketplaces/usage-panel/scripts/uninstall.mjs && claude plugin uninstall usage-panel@usage-panel && claude plugin marketplace remove usage-panel
 ```
 
-**Разница в том, что необратимо.** Расширение ставится обратно одной командой, а история — нет: архив хранит расход за периоды, которые Claude Code у себя уже подчистил, и больше он не лежит нигде. Поэтому с `--data` скрипт сначала печатает, сколько месяцев и на какую сумму вы стираете.
+**Накопленная история при этом остаётся.** Чтобы стереть и её, добавьте `--data` к первой команде — и учтите, что это необратимо: архив хранит расход за периоды, которые Claude Code у себя уже подчистил, и больше он не лежит нигде. Перед удалением скрипт печатает, сколько месяцев и на какую сумму вы стираете. Посмотреть, что будет удалено, ничего не трогая, — `--dry-run`.
 
-Сам плагин с его хуками и скиллом убирается командами клиента:
-
-```
-/plugin uninstall usage-panel@usage-panel
-/plugin marketplace remove usage-panel
-```
-
-После удаления расширения выполните в VS Code `Developer: Reload Window`.
+После удаления необходимо выполнить в VS Code `Developer: Reload Window`.
 
 ## Границы
 

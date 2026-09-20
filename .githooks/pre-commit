@@ -1,0 +1,4 @@
+#!/bin/sh
+# Поднимает версию плагина перед коммитом — см. .githooks/bump-version.mjs.
+# Включается один раз на машине: git config core.hooksPath .githooks
+exec node .githooks/bump-version.mjs
