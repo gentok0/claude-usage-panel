@@ -23,7 +23,10 @@ const QUOTE_MIN = 30;
 // The client wraps its own notes into the same text blocks as the user's words:
 // IDE pointers, reminders, task notifications, skill preambles.
 const NOISE_TAGS = /<(ide_[a-z_]+|system-reminder|task-notification|command-[a-z-]+|local-command-[a-z]+)>[\s\S]*?<\/\1>/g;
-const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>)/;
+// Отправленный скриншот клиент пишет отдельной записью сразу за словами человека.
+// Она служебная: если считать её ходом, сообщение рвётся надвое — подпись в одной
+// строке, деньги в другой. Отсекаем, и расход остаётся на ходе с его словами.
+const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:)/;
 
 function strip(text) {
   return text.replace(NOISE_TAGS, ' ').replace(/<\/?[a-z_-]+>/g, ' ').trim();
