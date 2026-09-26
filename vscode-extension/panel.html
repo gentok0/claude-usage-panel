@@ -37,6 +37,8 @@
     border: 1px solid var(--vscode-dropdown-border, var(--line-col)); border-radius: 4px; padding: 1px 4px;
   }
   input { min-width: 11em; }
+  #alert { margin-left: auto; color: var(--vscode-charts-red, #e51400); font-weight: 700; }
+  #alert:empty { display: none; }
 
   /* No padding on the right: the pinned column sticks to the very edge of the
      scrollport, and any padding there becomes a slit with the scrolling columns
@@ -149,6 +151,7 @@
   <label class="f"><span>область</span><select id="scope"><option value="0">текущий проект</option><option value="1">все проекты</option></select></label>
   <label class="f"><span>период</span><select id="period"></select></label>
   <label class="f"><span>поиск</span><input id="search" type="search" placeholder="тред или текст"></label>
+  <span id="alert"></span>
 </header>
 <div class="scroll"><div class="rows" id="list"></div></div>
 
@@ -172,7 +175,7 @@ const ARTICLES = [
   ['размышления', 'thinking', 'usdThinking'],
   ['свежий вход', 'input', 'usdInput'],
 ];
-const HEAD = ['', 'название треда', 'траты', 'дата', 'кеш до', 'модель', 'чтение', 'запись', 'генерация', 'размышления', 'свежий вход', 'стол'];
+const HEAD = ['', 'название треда', 'траты', 'дата', 'кеш до/вход', 'модель', 'чтение', 'запись', 'генерация', 'размышления', 'свежий вход', 'стол'];
 const INPUT_MIN = 1000;
 const DASH = '<span class="num">—</span>';
 let state = { threads: [] };
@@ -181,6 +184,7 @@ let state = { threads: [] };
 let archive = null;
 let archiveAsked = false;
 let merged = null;
+let flipTimer = 0;
 let period = 2;
 // Captions opened by a click, keyed by thread and time of the request.
 const openText = new Set();
@@ -195,12 +199,33 @@ const tok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).
 const p2 = (x) => String(x).padStart(2, '0');
 const when = (iso) => { const d = new Date(iso); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const requestsWord = (n) => {
+  const d = n % 10, h = n % 100;
+  return d === 1 && h !== 11 ? 'запрос' : d >= 2 && d <= 4 && (h < 12 || h > 14) ? 'запроса' : 'запросов';
+};
 
-function cacheLife(lastAt) {
-  const end = new Date(lastAt).getTime() + 3600e3;
-  if (end < Date.now()) return '';
+function renderAlert(unpriced) {
+  const list = Object.entries(unpriced || {});
+  const el = document.getElementById('alert');
+  el.textContent = list.length
+    ? `⚠ нет цены, идут по $0: ${list.map(([m, n]) => `${m.replace('claude-', '')}, ${n} ${requestsWord(n)}`).join('; ')} · /usage-panel:check`
+    : '';
+  el.title = list.length ? 'Модели нет в таблице цен, и её запросы вошли в суммы как $0. Команда найдёт ставки на странице цен и после вашего «да» запишет их.' : '';
+}
+
+const freshTurn = (turns) => turns.slice().reverse().find((x) => x.requests > 0);
+const cacheEnd = (turn) => new Date(turn.lastAt || turn.at).getTime() + 3600e3;
+
+// Срок кэша висит всегда; жив ли он, говорит цена входа: чтение стола или его перезапись.
+function cacheCell(turn, current) {
+  if (!turn) return DASH;
+  const end = cacheEnd(turn);
   const d = new Date(end);
-  return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const time = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const live = end > Date.now();
+  const entry = current ? (live ? turn.entryLive : turn.entryCold) : null;
+  const tip = live ? `кэш жив до ${time}, вход — чтение стола` : `кэш истёк в ${time}, вход — перезапись стола`;
+  return `<span class="muted" title="${tip}">${time}${entry == null ? '' : '/' + usd(entry)}</span>`;
 }
 
 function shape(t, missTokens) {
@@ -352,6 +377,7 @@ function render() {
     || t.window.turns.some((x) => (x.totals.input || 0) > INPUT_MIN));
 
   const grandTotal = sumOf(threads);
+  renderAlert(state.unpriced);
   document.getElementById('period').innerHTML = PERIODS
     .map(([label, days]) => `<option value="${days}" ${days === period ? 'selected' : ''}>${label}</option>`).join('');
   document.getElementById('scope').value = allProjects ? '1' : '0';
@@ -381,6 +407,12 @@ function render() {
   const list = document.getElementById('list');
   list.classList.toggle('with-input', showInput);
   list.innerHTML = threads.length ? html + grandRow : '<div class="empty">За выбранный период ничего нет.</div>';
+
+  // Цена входа меняется в миг, когда кэш истекает, даже если новых данных нет.
+  const now = Date.now();
+  const ends = threads.map((t) => freshTurn(t.window.turns)).filter(Boolean).map(cacheEnd).filter((e) => e > now);
+  clearTimeout(flipTimer);
+  if (ends.length) flipTimer = setTimeout(render, Math.min(...ends) - now + 1000);
 }
 
 function threadRows(t) {
@@ -399,16 +431,16 @@ function threadRows(t) {
   const at = top ? top.at : t.lastAt;
   const limitTokens = (top && top.compactAt) || t.compactAt || t.contextSize;
   const tableNow = top ? top.table : t.table;
-  // Срок кэша — тоже состояние выборки: под поиском по старому запросу он обязан
-  // показывать пусто (кэш того времени давно истёк), а не живой срок текущего хода.
-  const life = cacheLife(at);
+  // Срок кэша — тоже состояние выборки, а цена входа — только нынешнего хода треда:
+  // у старого хода из поиска она не значит ничего.
+  const current = Boolean(top) && top.at === (freshTurn(t.turns) || {}).at;
 
   const head = `<div class="tr" data-id="${t.id}">
     <span class="caret muted">${isOpen ? '▾' : '▸'}</span>
     <span class="name" title="${esc(threadName(t))}">${esc(threadName(t))}</span>
     <span class="sum">${usd(t.window.usd)}</span>
     <span class="muted">${when(at)}</span>
-    ${life ? `<span class="muted">${life}</span>` : DASH}
+    ${cacheCell(top, current)}
     ${DASH}
     ${articleCells(t.window.sum, miss)}
     ${tableCell(tableNow, limitTokens)}

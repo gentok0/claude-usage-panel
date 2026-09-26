@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   cacheDir, emptyTotals, addTotals, scanTranscript, sumModels, isRealRequest, normalizeModel, retention,
+  priceRecord, PRICES,
 } from './usage-lib.mjs';
 import { updateArchive } from './archive.mjs';
 
@@ -23,10 +24,12 @@ const QUOTE_MIN = 30;
 // The client wraps its own notes into the same text blocks as the user's words:
 // IDE pointers, reminders, task notifications, skill preambles.
 const NOISE_TAGS = /<(ide_[a-z_]+|system-reminder|task-notification|command-[a-z-]+|local-command-[a-z]+)>[\s\S]*?<\/\1>/g;
-// Отправленный скриншот клиент пишет отдельной записью сразу за словами человека.
-// Она служебная: если считать её ходом, сообщение рвётся надвое — подпись в одной
-// строке, деньги в другой. Отсекаем, и расход остаётся на ходе с его словами.
-const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:)/;
+// Часть записей от лица человека пишет сам клиент: пометку о скриншоте, прерывание,
+// продолжение после него. Если считать их ходами, разговор рвётся — подпись остаётся
+// в одной строке, деньги уходят в другую. Отсекаем: расход ложится на слова человека.
+// Проверено по журналам: за прерыванием и продолжением не стоит ни одного запроса к
+// модели, тогда как за раскрытой слэш-командой стоят — её отсекать нельзя.
+const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:|\[Request interrupted|Continue from where you left off)/;
 
 function strip(text) {
   return text.replace(NOISE_TAGS, ' ').replace(/<\/?[a-z_-]+>/g, ' ').trim();
@@ -82,7 +85,7 @@ function newThread(project, id) {
   };
 }
 
-function readLog(file, thread, seen) {
+function readLog(file, thread, seen, unpriced) {
   const text = fs.readFileSync(file, 'utf8');
   let turn = null;
   let lastAnswer = '';
@@ -177,11 +180,22 @@ function readLog(file, thread, seen) {
     // «стола» принадлежит ходу, а не треду целиком.
     turn.contextSize = thread.contextSize;
     turn.compactAt = thread.compactAt;
+    // Кэш продлевается каждым запросом, поэтому его срок отсчитывается от последнего.
+    turn.lastAt = rec.timestamp;
+    // Первый запрос при возвращении: живой кэш стол читает, остывший пишет заново; модель без цены — null, а не ноль.
+    const key = normalizeModel(rec.message.model);
+    const known = PRICES[key];
+    if (!known) unpriced[key] = (unpriced[key] || 0) + 1;
+    const cost = (usage) => priceRecord({ ...usage, speed: u.speed, inference_geo: u.inference_geo }, rec.message.model).usd;
+    turn.entryLive = known ? cost({ cache_read_input_tokens: turn.table }) : null;
+    turn.entryCold = known ? cost({ cache_creation: { ephemeral_1h_input_tokens: turn.table } }) : null;
   }
 }
 
 function build(currentDir) {
   const threads = [];
+  // Модель, которой нет в таблице цен, считается по нулям — панель должна сказать об этом вслух.
+  const unpriced = {};
   const current = path.basename(currentDir);
   for (const project of fs.readdirSync(PROJECTS)) {
     // Сверка ставок работает во временной папке и удаляет свой журнал за собой,
@@ -193,7 +207,7 @@ function build(currentDir) {
     try { entries = fs.readdirSync(dir); } catch { continue; }
     for (const name of entries.filter((n) => n.endsWith('.jsonl'))) {
       const thread = newThread(project, name.slice(0, -6));
-      try { readLog(path.join(dir, name), thread, new Set()); } catch { continue; }
+      try { readLog(path.join(dir, name), thread, new Set(), unpriced); } catch { continue; }
       if (thread.requests) threads.push(thread);
     }
   }
@@ -214,6 +228,7 @@ function build(currentDir) {
     generatedAt: new Date().toISOString(),
     current,
     currentLabel: label(current, (threads.find((t) => t.project === current) || {}).dir),
+    unpriced,
     threads: threads.map((t) => ({
       ...t, usd: sumModels({ x: t.totals }).usd, projectLabel: label(t.project, t.dir),
     })),
@@ -259,6 +274,7 @@ const stats = process.argv.includes('--no-archive') ? null : updateArchive(data)
 if (process.argv.includes('--print')) {
   const usd = data.threads.reduce((a, t) => a + t.usd, 0);
   console.log(`проект ${data.currentLabel} · тредов ${data.threads.length} · ходов ${data.threads.reduce((a, t) => a + t.turns.length, 0)} · $${usd.toFixed(2)}`);
+  for (const [model, n] of Object.entries(data.unpriced)) console.log(`нет цены: ${model} — запросов ${n}`);
   if (stats) {
     console.log(`архив: месяцев ${stats.months} (переписано ${stats.written}) · тредов ${stats.threads} · ходов ${stats.turns} · ${(stats.bytes / 1024).toFixed(0)} КБ`);
   }

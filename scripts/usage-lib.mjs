@@ -1,5 +1,5 @@
 // Shared token/price logic for the status line and the summary report.
-// Prices: https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-11).
+// Prices: https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-24).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,10 +7,14 @@ import os from 'node:os';
 
 const OPUS = { in: 5, w5m: 6.25, w1h: 10, read: 0.5, out: 25 };
 const OPUS_FAST = { in: 10, w5m: 12.5, w1h: 20, read: 1, out: 50 };
+// Opus 5.5 reads its cache at 0.05x input, not the usual 0.1x.
+const OPUS_55 = { in: 4, w5m: 5, w1h: 8, read: 0.2, out: 20 };
+const OPUS_55_FAST = { in: 8, w5m: 10, w1h: 16, read: 0.4, out: 40 };
 const FABLE_51 = { in: 10, w5m: 12.5, w1h: 20, read: 0.25, out: 50 };
 const FABLE_5 = { in: 10, w5m: 12.5, w1h: 20, read: 1, out: 50 };
 
 const DEFAULT_PRICES = {
+  'claude-opus-5-5': { ...OPUS_55, fast: OPUS_55_FAST },
   'claude-opus-5': { ...OPUS, fast: OPUS_FAST },
   'claude-opus-4-8': { ...OPUS, fast: OPUS_FAST },
   'claude-opus-4-7': OPUS,
@@ -27,7 +31,7 @@ const DEFAULT_PRICES = {
 };
 
 export const WEB_SEARCH_USD = 0.01; // $10 per 1000 searches
-const DEFAULT_CHECKED = '2026-09-11';
+const DEFAULT_CHECKED = '2026-09-24';
 
 // Rates are data, not code: prices.json in the plugin data directory replaces individual
 // rows and `multiplier` applies a flat contracted discount, so refreshing them is one file
@@ -121,7 +125,7 @@ export function addTotals(a, b) {
 }
 
 // One transcript record -> per-request totals with price applied.
-function priceRecord(usage, model) {
+export function priceRecord(usage, model) {
   const key = normalizeModel(model);
   const base = PRICES[key];
   const fast = usage.speed === 'fast';

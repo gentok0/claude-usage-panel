@@ -12,6 +12,8 @@
 //   node calibrate.mjs --keep          не удалять журнал пробного запроса
 //   --claude <путь>                    свой путь к клиенту, если он не в PATH
 //   --json                             машинный вывод
+//   node calibrate.mjs --rates <модель> in=4 w5m=5 w1h=8 read=0.2 out=20 [fast.in=8 …]
+//                                      записать ставки модели, которой нет в таблице цен ($ за миллион токенов)
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,6 +31,32 @@ const has = (name) => argv.includes(name);
 
 const PROJECTS = path.join(os.homedir(), '.claude', 'projects');
 const encodeProject = (dir) => dir.replace(/[\\/:]/g, '-').toLowerCase();
+const pricesFile = () => path.join(process.env.CLAUDE_PLUGIN_DATA || cacheDir(), 'prices.json');
+const readPrices = (file) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
+const RATE_KEYS = ['in', 'w5m', 'w1h', 'read', 'out'];
+
+function writeRates() {
+  const model = normalizeModel(arg('--rates'));
+  const rates = {};
+  for (const a of argv) {
+    const m = a.match(/^(fast\.)?(in|w5m|w1h|read|out)=(\d+(?:\.\d+)?)$/);
+    if (!m) continue;
+    if (m[1]) (rates.fast ||= {})[m[2]] = Number(m[3]);
+    else rates[m[2]] = Number(m[3]);
+  }
+  const missing = RATE_KEYS.filter((k) => rates[k] === undefined);
+  const fastMissing = rates.fast ? RATE_KEYS.filter((k) => rates.fast[k] === undefined) : [];
+  if (!arg('--rates') || arg('--rates').includes('=') || missing.length || fastMissing.length) {
+    console.error(`нужны модель и все пять ставок: ${RATE_KEYS.map((k) => `${k}=…`).join(' ')}`);
+    if (missing.length) console.error(`не хватает: ${missing.join(', ')}`);
+    if (fastMissing.length) console.error(`у fast не хватает: ${fastMissing.join(', ')}`);
+    process.exit(1);
+  }
+  const file = pricesFile();
+  const current = readPrices(file);
+  fs.writeFileSync(file, JSON.stringify({ ...current, models: { ...current.models, [model]: rates } }, null, 2));
+  console.log(`записано в ${file}: ${model} ${JSON.stringify(rates)}`);
+}
 
 // Модель по умолчанию — та, которой человек реально работает: считаем по свежим записям.
 export function usualModel() {
@@ -188,10 +216,13 @@ if (!has('--apply')) {
   process.exit(0);
 }
 
-const file = path.join(process.env.CLAUDE_PLUGIN_DATA || cacheDir(), 'prices.json');
-const current = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+const file = pricesFile();
+const current = readPrices(file);
 fs.writeFileSync(file, JSON.stringify({ ...current, multiplier: Number(ratio.toFixed(4)) }, null, 2));
 console.log(`записано в ${file}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (has('--rates')) writeRates();
+  else main();
+}
