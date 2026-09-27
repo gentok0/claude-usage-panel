@@ -91,6 +91,7 @@
   .qt { grid-column: 2 / -1; white-space: pre-wrap; font-style: italic;
     padding: 2px .9ch 10px; line-height: 1.45; max-width: 110ch;
     border-left: 1px dashed var(--line-col); }
+  .qt .qf { font-style: normal; opacity: .7; }
 
   /* The table column stays against the right edge while everything else scrolls
      sideways under it — it is the one number that must never leave the screen. */
@@ -198,7 +199,7 @@ const usd = (n) => '$' + (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.t
 const tok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K' : String(n);
 const p2 = (x) => String(x).padStart(2, '0');
 const when = (iso) => { const d = new Date(iso); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
-const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const requestsWord = (n) => {
   const d = n % 10, h = n % 100;
   return d === 1 && h !== 11 ? 'запрос' : d >= 2 && d <= 4 && (h < 12 || h > 14) ? 'запроса' : 'запросов';
@@ -207,10 +208,10 @@ const requestsWord = (n) => {
 function renderAlert(unpriced) {
   const list = Object.entries(unpriced || {});
   const el = document.getElementById('alert');
-  el.textContent = list.length
-    ? `⚠ нет цены, идут по $0: ${list.map(([m, n]) => `${m.replace('claude-', '')}, ${n} ${requestsWord(n)}`).join('; ')} · /usage-panel:check`
+  el.textContent = list.length ? '⚠ траты идут по 0$, вызовите /usage-panel:check для исправления' : '';
+  el.title = list.length
+    ? `Нет в таблице цен: ${list.map(([m, n]) => `${m.replace('claude-', '')} — ${n} ${requestsWord(n)}`).join('; ')}. Команда найдёт ставки на странице цен и после вашего «да» запишет их.`
     : '';
-  el.title = list.length ? 'Модели нет в таблице цен, и её запросы вошли в суммы как $0. Команда найдёт ставки на странице цен и после вашего «да» запишет их.' : '';
 }
 
 const freshTurn = (turns) => turns.slice().reverse().find((x) => x.requests > 0);
@@ -270,12 +271,17 @@ function tableCell(table, limitTokens) {
 // The phrase is matched whole, as a substring. A thread found by its own name keeps
 // all its requests: there the hit is the thread itself. Otherwise only the requests
 // carrying the phrase survive, and the thread is counted by them alone.
+// The message keeps its line breaks, the search does not care about them: a phrase
+// typed on one line still finds text that wraps, and messages sent mid-turn count.
+const flat = (s) => String(s).replace(/\s+/g, ' ').toLowerCase();
+const said = (x) => [x.full || x.text || '', ...(x.followups || []).map((f) => f.full)].join(' ');
+
 function selection(thread, since, q) {
   const inPeriod = thread.turns.filter((x) => !since || new Date(x.at).getTime() >= since);
-  const titleHit = !!q && (thread.title || '').toLowerCase().includes(q);
+  const titleHit = !!q && flat(thread.title || '').includes(q);
   const turns = !q || titleHit
     ? inPeriod
-    : inPeriod.filter((x) => (x.full || x.text || '').toLowerCase().includes(q));
+    : inPeriod.filter((x) => flat(said(x)).includes(q));
 
   const sum = shape({ cacheRead: 0, usdCacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, usdCacheWrite1h: 0, usdCacheWrite5m: 0, output: 0, thinking: 0, usdOutput: 0, input: 0, usdInput: 0 }, 0);
   let usdTotal = 0;
@@ -368,7 +374,7 @@ function headerRow() {
 function render() {
   const since = windowStart(period);
   const threads = sourceThreads()
-    .map((t) => ({ ...t, window: selection(t, since, query.toLowerCase()) }))
+    .map((t) => ({ ...t, window: selection(t, since, flat(query)) }))
     .filter((t) => t.window.matched)
     .filter((t) => t.window.usd > 0)
     .filter((t) => allProjects || t.project === state.current);
@@ -452,7 +458,9 @@ function threadRows(t) {
     const key = `${t.id}|${x.at}`;
     const shown = openText.has(key);
     // Opened: the whole message and no tooltip — it would cover what was opened.
-    const tip = shown ? '' : ` title="${esc(x.full || x.text)}"`;
+    const later = (x.followups || []).map((f) => ({ mark: `посреди хода, ${when(f.at).slice(-5)}`, text: f.full }));
+    const tip = shown ? '' : ` title="${esc([x.full || x.text, ...later.map((f) => `— ${f.mark} —\n${f.text}`)].join('\n\n'))}"`;
+    const body = esc(x.full || x.text) + later.map((f) => `\n\n<span class="qf">${esc(f.mark)}</span>\n${esc(f.text)}`).join('');
     return `<div class="qr ${i === 0 ? 'first' : ''}">
     <span></span>
     <span class="name${shown ? ' open' : ''}" data-turn="${esc(key)}"${tip}><span class="clip">${esc(x.text)}</span></span>
@@ -462,7 +470,7 @@ function threadRows(t) {
     <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
     ${articleCells(shape(x.totals, x.missTokens), missUsdOf(x.missTokens))}
     ${tableCell(x.table, x.compactAt || limitTokens)}
-  </div>` + (shown ? `<div class="qt">${esc(x.full || x.text)}</div>` : '');
+  </div>` + (shown ? `<div class="qt">${body}</div>` : '');
   }).join('');
 
   const more = turns.length > limit

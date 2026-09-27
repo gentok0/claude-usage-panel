@@ -31,9 +31,20 @@ const NOISE_TAGS = /<(ide_[a-z_]+|system-reminder|task-notification|command-[a-z
 // модели, тогда как за раскрытой слэш-командой стоят — её отсекать нельзя.
 const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:|\[Request interrupted|Continue from where you left off)/;
 
+// Вставленный текст клиент оборачивает тегом с атрибутом: обёртку снимаем, сам текст — слова человека.
+const PASTE_WRAP = /<\/?pasted_content\b[^>]*>/g;
+
 function strip(text) {
-  return text.replace(NOISE_TAGS, ' ').replace(/<\/?[a-z_-]+>/g, ' ').trim();
+  return text.replace(NOISE_TAGS, ' ').replace(PASTE_WRAP, ' ').replace(/<\/?[a-z_-]+>/g, ' ').trim();
 }
+
+// The message as the person wrote it: line breaks and paragraphs stay, only runs of
+// spaces and empty lines are squeezed.
+const tidy = (text) => text.replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ')
+  .replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+const blocksText = (c) => (typeof c === 'string' ? c
+  : Array.isArray(c) ? c.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n\n') : '');
 
 // A turn's caption: the first sentence of what the user actually wrote — quotes of
 // my own previous answer are dropped, whether or not they carry ">".
@@ -62,9 +73,7 @@ export function caption(text, previousAnswer = '') {
 // A user message can carry several text blocks: the client's note first, the
 // person's words second — so all of them are joined before anything is decided.
 function userText(rec) {
-  const c = rec.message?.content;
-  const raw = typeof c === 'string' ? c
-    : Array.isArray(c) ? c.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n\n') : '';
+  const raw = blocksText(rec.message?.content);
   if (!raw || SERVICE_PREFIX.test(raw.trim())) return '';
   return strip(raw) ? raw : '';
 }
@@ -100,6 +109,17 @@ function readLog(file, thread, seen, unpriced) {
     // subdirectories and would rename the project after whatever was entered last.
     if (rec.cwd && !thread.dir) thread.dir = rec.cwd;
 
+    // A message sent while the model is still working does not open a turn: the
+    // client folds it into the running one, and the requests after it stay there.
+    // The same record type carries the client's own background-task notices.
+    const queued = rec.type === 'attachment' ? rec.attachment : null;
+    if (queued?.type === 'queued_command') {
+      const human = queued.commandMode === 'prompt' && (!queued.origin || queued.origin.kind === 'human');
+      const said = human && turn ? tidy(strip(blocksText(queued.prompt))) : '';
+      if (said) (turn.followups ||= []).push({ at: rec.timestamp || queued.timestamp, full: said });
+      continue;
+    }
+
     if (rec.type === 'user') {
       const t = userText(rec);
       if (t) {
@@ -108,7 +128,7 @@ function readLog(file, thread, seen, unpriced) {
           at: rec.timestamp, text: caption(t, lastAnswer),
           // Whole message, uncut: the search runs over this field, and a cut here
           // makes it silently blind past the first paragraph.
-          full: strip(t).replace(/\s+/g, ' '),
+          full: tidy(strip(t)),
           usd: 0, requests: 0, model: '', effort: '', missTokens: 0, table: 0, totals: emptyTotals(),
           // Множители цены и разрезы отчёта: сама цена считается при разборе, но без
           // этих полей её потом нечем перепроверить и не по чему разложить.

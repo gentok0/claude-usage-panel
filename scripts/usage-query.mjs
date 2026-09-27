@@ -29,7 +29,10 @@ const has = (name) => argv.includes(name);
 
 const BY = arg('--by', 'thread');
 const TOP = Number(arg('--top', 0));
-const SEARCH = String(arg('--search', '')).toLowerCase();
+// Как в панели: переводы строк поиску не мешают, сообщения посреди хода ищутся вместе с ходом.
+const flat = (s) => String(s).replace(/\s+/g, ' ').toLowerCase();
+const said = (turn) => [turn.full || turn.text || '', ...(turn.followups || []).map((f) => f.full)].join(' ');
+const SEARCH = flat(arg('--search', '')).trim();
 const PROJECT = arg('--project', '');
 const DAYS = arg('--days', '');
 const FROM = arg('--from', '');
@@ -93,11 +96,11 @@ const groups = new Map();
 const grand = emptyBucket();
 for (const thread of data.threads) {
   if (project && thread.project !== project) continue;
-  const titleHit = SEARCH && (thread.title || '').toLowerCase().includes(SEARCH);
+  const titleHit = SEARCH && flat(thread.title || '').includes(SEARCH);
   for (const turn of thread.turns) {
     const at = new Date(turn.at).getTime();
     if (!(at >= from && at <= to)) continue;
-    if (SEARCH && !titleHit && !(turn.full || turn.text || '').toLowerCase().includes(SEARCH)) continue;
+    if (SEARCH && !titleHit && !flat(said(turn)).includes(SEARCH)) continue;
     if (!turn.requests) continue;
 
     // Ключ разреза. «Инструменты» раскладывают один ход по нескольким ключам, поэтому
