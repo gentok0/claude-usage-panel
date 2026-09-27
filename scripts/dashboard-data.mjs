@@ -29,7 +29,7 @@ const NOISE_TAGS = /<(ide_[a-z_]+|system-reminder|task-notification|command-[a-z
 // в одной строке, деньги уходят в другую. Отсекаем: расход ложится на слова человека.
 // Проверено по журналам: за прерыванием и продолжением не стоит ни одного запроса к
 // модели, тогда как за раскрытой слэш-командой стоят — её отсекать нельзя.
-const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:|\[Request interrupted|Continue from where you left off)/;
+const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:|\[Image: original|\[Request interrupted|Continue from where you left off)/;
 
 // Вставленный текст клиент оборачивает тегом с атрибутом: обёртку снимаем, сам текст — слова человека.
 const PASTE_WRAP = /<\/?pasted_content\b[^>]*>/g;
