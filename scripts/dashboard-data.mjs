@@ -10,8 +10,12 @@ import {
   priceRecord, PRICES,
 } from './usage-lib.mjs';
 import { updateArchive } from './archive.mjs';
+import { attachmentsOf, saveAttachments } from './attachments.mjs';
 
 const PROJECTS = path.join(os.homedir(), '.claude', 'projects');
+// The window is what the journals still hold; the archive is what stays after they
+// are wiped. --no-archive is for test runs that must not touch the store.
+const STORE = !process.argv.includes('--no-archive');
 const CONTEXT = { 'claude-haiku-4-5': 200000 };
 const DEFAULT_CONTEXT = 1000000;
 // Work stops not at the end of the window but where auto-compaction fires: about
@@ -115,16 +119,24 @@ function readLog(file, thread, seen, unpriced) {
     const queued = rec.type === 'attachment' ? rec.attachment : null;
     if (queued?.type === 'queued_command') {
       const human = queued.commandMode === 'prompt' && (!queued.origin || queued.origin.kind === 'human');
-      const said = human && turn ? tidy(strip(blocksText(queued.prompt))) : '';
-      if (said) (turn.followups ||= []).push({ at: rec.timestamp || queued.timestamp, full: said });
+      if (human && turn) {
+        const at = rec.timestamp || queued.timestamp;
+        const said = tidy(strip(blocksText(queued.prompt)));
+        const files = saveAttachments(thread.id, at, attachmentsOf(queued.prompt), STORE);
+        if (said || files.length) (turn.followups ||= []).push({ at, full: said, ...(files.length ? { files } : {}) });
+      }
       continue;
     }
 
     if (rec.type === 'user') {
       const t = userText(rec);
+      const files = rec.isMeta ? [] : saveAttachments(thread.id, rec.timestamp, attachmentsOf(rec.message?.content), STORE);
+      // A picture sent without words opens no turn, so it stays with the running one,
+      // the same one its requests go to.
+      if (!t && files.length && turn) (turn.files ||= []).push(...files);
       if (t) {
         turn = {
-
+          ...(files.length ? { files } : {}),
           at: rec.timestamp, text: caption(t, lastAnswer),
           // Whole message, uncut: the search runs over this field, and a cut here
           // makes it silently blind past the first paragraph.
@@ -288,9 +300,7 @@ const data = build(dir);
 // when the journals gave no root of their own.
 if (currentCwd && !data.currentLabel) data.currentLabel = path.basename(currentCwd);
 fs.writeFileSync(out, JSON.stringify(data));
-// The window is what the journals still hold; the archive is what stays after they
-// are wiped. --no-archive is for test runs that must not touch the store.
-const stats = process.argv.includes('--no-archive') ? null : updateArchive(data);
+const stats = STORE ? updateArchive(data) : null;
 if (process.argv.includes('--print')) {
   const usd = data.threads.reduce((a, t) => a + t.usd, 0);
   console.log(`проект ${data.currentLabel} · тредов ${data.threads.length} · ходов ${data.threads.reduce((a, t) => a + t.turns.length, 0)} · $${usd.toFixed(2)}`);

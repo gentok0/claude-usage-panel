@@ -231,10 +231,11 @@ export function sumModels(byModel) {
   return out;
 }
 
+// The same folder without creating it: a reader must leave no trace on disk.
+export const cacheRoot = () => process.env.CLAUDE_USAGE_DIR || path.join(os.homedir(), '.claude', 'usage-counter');
+
 export function cacheDir() {
-  const dir =
-    process.env.CLAUDE_USAGE_DIR ||
-    path.join(os.homedir(), '.claude', 'usage-counter');
+  const dir = cacheRoot();
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

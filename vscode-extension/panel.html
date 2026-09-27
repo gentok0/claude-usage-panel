@@ -92,6 +92,9 @@
     padding: 2px .9ch 10px; line-height: 1.45; max-width: 110ch;
     border-left: 1px dashed var(--line-col); }
   .qt .qf { font-style: normal; opacity: .7; }
+  /* A path is data and is never cut: a long one wraps at any character. */
+  .qt .qa { font-style: normal; overflow-wrap: anywhere; }
+  .qt .qa a { color: var(--vscode-textLink-foreground); text-decoration: underline; cursor: pointer; }
 
   /* The table column stays against the right edge while everything else scrolls
      sideways under it — it is the one number that must never leave the screen. */
@@ -298,6 +301,7 @@ function selection(thread, since, q) {
 
 // A thread without a generated title is still recognisable by how it started.
 const threadName = (t) => t.title || (t.turns[0] && t.turns[0].text) || t.id.slice(0, 8);
+const kindOf = (media) => (String(media).startsWith('image/') ? 'картинка' : media === 'application/pdf' ? 'PDF' : 'файл');
 
 // Threads from several sources folded into one list, keyed by thread and by the
 // time of each request. Applied in order, so the window laid over the archive wins:
@@ -458,9 +462,15 @@ function threadRows(t) {
     const key = `${t.id}|${x.at}`;
     const shown = openText.has(key);
     // Opened: the whole message and no tooltip — it would cover what was opened.
-    const later = (x.followups || []).map((f) => ({ mark: `посреди хода, ${when(f.at).slice(-5)}`, text: f.full }));
+    const later = (x.followups || []).map((f) => ({ mark: `посреди хода, ${when(f.at).slice(-5)}`, text: f.full, files: f.files || [] }));
     const tip = shown ? '' : ` title="${esc([x.full || x.text, ...later.map((f) => `— ${f.mark} —\n${f.text}`)].join('\n\n'))}"`;
-    const body = esc(x.full || x.text) + later.map((f) => `\n\n<span class="qf">${esc(f.mark)}</span>\n${esc(f.text)}`).join('');
+    // Вложения хода — сверху раскрытого текста: приложенные к сообщению, затем к
+    // сообщениям посреди хода, с их временем. Клик открывает файл во вкладке VS Code.
+    const files = [...(x.files || []).map((f) => ({ ...f, mark: '' })), ...later.flatMap((f) => f.files.map((a) => ({ ...a, mark: f.mark })))];
+    const attached = files.length
+      ? `<span class="qa">${files.map((f) => `<a data-open="${esc(f.path)}">${kindOf(f.media)} · ${esc(f.path)}</a>${f.mark ? ` <span class="qf">${esc(f.mark)}</span>` : ''}`).join('\n')}</span>\n\n`
+      : '';
+    const body = attached + esc(x.full || x.text) + later.map((f) => `\n\n<span class="qf">${esc(f.mark)}</span>\n${esc(f.text)}`).join('');
     return `<div class="qr ${i === 0 ? 'first' : ''}">
     <span></span>
     <span class="name${shown ? ' open' : ''}" data-turn="${esc(key)}"${tip}><span class="clip">${esc(x.text)}</span></span>
@@ -485,6 +495,8 @@ document.addEventListener('change', (e) => {
 document.getElementById('search').addEventListener('input', (e) => { query = e.target.value.trim(); render(); });
 
 document.addEventListener('click', (e) => {
+  const file = e.target.closest('a[data-open]');
+  if (file) { vscode.postMessage({ kind: 'open', path: file.dataset.open }); return; }
   const exp = e.target.closest('button[data-expand]');
   if (exp) { expanded.add(exp.dataset.expand); render(); return; }
   // A click that ended a selection is not a click on the caption: the person was

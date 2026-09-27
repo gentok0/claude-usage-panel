@@ -21,10 +21,13 @@ const extDirs = fs.existsSync(extRoot)
   ? fs.readdirSync(extRoot).filter((n) => n.startsWith('local.claude-usage-panel-'))
   : [];
 
+const countFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true })
+  .reduce((n, e) => n + (e.isDirectory() ? countFiles(path.join(dir, e.name)) : 1), 0);
+
 // Что именно человек потеряет вместе с данными — считаем до удаления, а не после.
 function describeData() {
   const archive = path.join(dataDir, 'archive');
-  if (!fs.existsSync(archive)) return { months: 0, threads: 0, usd: 0 };
+  if (!fs.existsSync(archive)) return { months: 0, threads: 0, usd: 0, files: 0 };
   let months = 0, threads = 0, usd = 0;
   for (const file of fs.readdirSync(archive).filter((f) => /^\d{4}-\d{2}\.json$/.test(f))) {
     months += 1;
@@ -32,7 +35,8 @@ function describeData() {
     threads += data.threads.length;
     usd += data.threads.reduce((sum, t) => sum + (t.usd || 0), 0);
   }
-  return { months, threads, usd };
+  const attached = path.join(archive, 'files');
+  return { months, threads, usd, files: fs.existsSync(attached) ? countFiles(attached) : 0 };
 }
 
 if (!extDirs.length) console.log('— расширения VS Code нет, удалять нечего');
@@ -40,9 +44,9 @@ for (const name of extDirs) console.log(`− расширение VS Code → ${
 
 if (WITH_DATA) {
   if (fs.existsSync(dataDir)) {
-    const { months, threads, usd } = describeData();
+    const { months, threads, usd, files } = describeData();
     console.log(`− данные → ${dataDir}`);
-    console.log(`  в архиве месяцев ${months}, тредов ${threads}, на сумму $${usd.toFixed(2)} — восстановить будет нечем:`);
+    console.log(`  в архиве месяцев ${months}, тредов ${threads}, на сумму $${usd.toFixed(2)}, вложений ${files} — восстановить будет нечем:`);
     console.log('  расход за периоды, которые Claude Code уже подчистил, есть только здесь');
   } else {
     console.log('— папки данных нет, удалять нечего');

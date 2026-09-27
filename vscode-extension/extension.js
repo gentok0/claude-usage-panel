@@ -3,10 +3,20 @@ const path = require('path');
 const os = require('os');
 const vscode = require('vscode');
 
-const HOME = path.join(os.homedir(), '.claude', 'usage-counter');
+const HOME = process.env.CLAUDE_USAGE_DIR || path.join(os.homedir(), '.claude', 'usage-counter');
 const DATA = path.join(HOME, 'dashboard.json');
 const ARCHIVE = path.join(HOME, 'archive');
+const FILES = path.join(ARCHIVE, 'files');
 const MONTH_FILE = /^\d{4}-\d{2}\.json$/;
+
+// Открывает только вложения архива: путь приходит со страницы, и всё за пределами
+// папки вложений отклоняется. Показывает сам VS Code — сторонних программ панель не запускает.
+function openAttachment(file) {
+  const full = path.resolve(String(file || ''));
+  const inside = path.relative(FILES, full);
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside) || !fs.existsSync(full)) return;
+  vscode.commands.executeCommand('vscode.open', vscode.Uri.file(full));
+}
 
 function read() {
   try {
@@ -61,6 +71,7 @@ class Dashboard {
       // Asked for only when the period is "all time": the archive is the whole
       // history and weighs megabytes, while a tick needs the window alone.
       if (m === 'archive') { this.wantArchive = true; this.pushArchive(); }
+      if (m && m.kind === 'open') openAttachment(m.path);
     });
 
     // The counter rewrites the file on every tick; fs.watch misses some writes on
