@@ -102,12 +102,15 @@ function readLog(file, thread, seen, unpriced) {
   const text = fs.readFileSync(file, 'utf8');
   let turn = null;
   let lastAnswer = '';
+  let lastPrompt = '';
   for (const line of text.split('\n')) {
     if (!line || line[0] !== '{') continue;
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
 
     if (rec.aiTitle) thread.title = rec.aiTitle;
+    // A thread the client never named it labels with the last message; the panel does the same.
+    if (rec.type === 'last-prompt' && rec.lastPrompt) lastPrompt = rec.lastPrompt;
     // The first cwd only: it is the folder the session started in, the one the
     // journal directory is named after. Later records follow the shell around
     // subdirectories and would rename the project after whatever was entered last.
@@ -129,6 +132,9 @@ function readLog(file, thread, seen, unpriced) {
     }
 
     if (rec.type === 'user') {
+      // The text of a skill or command the client inserts on my call points at that call:
+      // it is not the person's words and opens no turn.
+      if (rec.sourceToolUseID) continue;
       const t = userText(rec);
       const files = rec.isMeta ? [] : saveAttachments(thread.id, rec.timestamp, attachmentsOf(rec.message?.content), STORE);
       // A picture sent without words opens no turn, so it stays with the running one,
@@ -222,6 +228,7 @@ function readLog(file, thread, seen, unpriced) {
     turn.entryLive = known ? cost({ cache_read_input_tokens: turn.table }) : null;
     turn.entryCold = known ? cost({ cache_creation: { ephemeral_1h_input_tokens: turn.table } }) : null;
   }
+  if (!thread.title) thread.title = lastPrompt;
 }
 
 function build(currentDir) {
