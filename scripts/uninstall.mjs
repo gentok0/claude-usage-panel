@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Убирает то, чего не уносит `/plugin uninstall`: расширение VS Code и, по явной
+// Убирает то, чего не уносит `claude plugin uninstall`: расширение VS Code и, по явной
 // просьбе, накопленные данные. Сам плагин, его хуки и скилл уходят командой клиента.
 //
 //   node uninstall.mjs             убрать расширение, данные оставить
@@ -64,6 +64,6 @@ for (const name of extDirs) fs.rmSync(path.join(extRoot, name), { recursive: tru
 if (WITH_DATA) fs.rmSync(dataDir, { recursive: true, force: true });
 
 console.log('\nготово. осталось убрать сам плагин командами клиента:');
-console.log('  /plugin uninstall usage-panel@<витрина>');
-console.log('  /plugin marketplace remove <витрина>');
+console.log('  claude plugin uninstall usage-panel@<витрина>');
+console.log('  claude plugin marketplace remove <витрина>');
 if (extDirs.length) console.log('и выполнить «Developer: Reload Window» в VS Code.');

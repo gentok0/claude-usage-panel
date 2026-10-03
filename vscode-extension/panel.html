@@ -241,19 +241,27 @@ function shape(t, missTokens) {
     thinking: t.thinking, usdThinking: think,
     input: t.input, usdInput: t.usdInput,
     missTokens: missTokens || 0,
+    missUsd: missUsdOf(t, missTokens),
   };
 }
 
-const missUsdOf = (missTokens) => missTokens * (10 - 0.5) / 1e6;
+// Цена промаха кэша — разница ставок записи и чтения, взятых из цен самого хода: у каждой модели своя.
+function missUsdOf(t, missTokens) {
+  const written = t.cacheWrite1h + t.cacheWrite5m;
+  if (!missTokens || !written) return 0;
+  const write = (t.usdCacheWrite1h + t.usdCacheWrite5m) / written;
+  const read = t.cacheRead ? t.usdCacheRead / t.cacheRead : 0;
+  return missTokens * (write - read);
+}
 
 // One cell per article, always in the same column, so rows compare vertically.
-function articleCells(s, missUsd) {
+function articleCells(s) {
   const max = Math.max(...ARTICLES.map(([, , m]) => s[m]));
   return ARTICLES.map(([, k, m]) => {
     if (k === 'input' && !showInput) return '';
     // Fresh input below the threshold is noise; its appearance is the signal.
     if (s[k] === 0 || (k === 'input' && s[k] <= INPUT_MIN)) return DASH;
-    const missNote = k === 'write' && missUsd > 0 ? ` <span class="miss">пром ${usd(missUsd)}</span>` : '';
+    const missNote = k === 'write' && s.missUsd > 0 ? ` <span class="miss">пром ${usd(s.missUsd)}</span>` : '';
     return `<span class="num ${s[m] === max ? 'top' : ''}"><b>${tok(s[k])}/${usd(s[m])}</b>${missNote}</span>`;
   }).join('');
 }
@@ -354,7 +362,7 @@ function totalsRow(total, label, grand) {
     <span class="lbl">${esc(label)}</span>
     <span class="sum">${usd(total.usd)}</span>
     ${DASH}${DASH}${DASH}
-    ${articleCells(sum, missUsdOf(sum.missTokens))}
+    ${articleCells(sum)}
     <span class="col-table num">—</span>
   </div>`;
 }
@@ -431,7 +439,6 @@ function threadRows(t) {
   const isOpen = open.has(t.id);
   const turns = t.window.turns.slice().reverse();
   const limit = expanded.has(t.id) ? turns.length : 10;
-  const miss = missUsdOf(t.window.sum.missTokens);
   // Строка треда описывает ВЫБОРКУ, а не тред целиком: дата, стол и его знаменатель
   // берутся у самого свежего хода выборки — того, что стоит первой строкой под ней.
   // Иначе под поиском по старому запросу стол продолжал бы тикать текущим ходом.
@@ -452,7 +459,7 @@ function threadRows(t) {
     <span class="muted">${when(at)}</span>
     ${cacheCell(top, current)}
     ${DASH}
-    ${articleCells(t.window.sum, miss)}
+    ${articleCells(t.window.sum)}
     ${tableCell(tableNow, limitTokens)}
   </div>`;
 
@@ -478,7 +485,7 @@ function threadRows(t) {
     <span class="muted">${when(x.at)}</span>
     ${DASH}
     <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
-    ${articleCells(shape(x.totals, x.missTokens), missUsdOf(x.missTokens))}
+    ${articleCells(shape(x.totals, x.missTokens))}
     ${tableCell(x.table, x.compactAt || limitTokens)}
   </div>` + (shown ? `<div class="qt">${body}</div>` : '');
   }).join('');

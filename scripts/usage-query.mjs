@@ -17,7 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { cacheDir, emptyTotals, addTotals, fmtTokens, fmtUsd, PRICES_CHECKED } from './usage-lib.mjs';
+import { cacheDir, emptyTotals, addTotals, fmtTokens, fmtUsd, missUsdOf, PRICES_CHECKED } from './usage-lib.mjs';
 import { readArchive, mergeThreads } from './archive.mjs';
 
 const argv = process.argv.slice(2);
@@ -65,7 +65,7 @@ function load() {
 }
 
 // Статьи в том же составе и с теми же именами, что в панели.
-function shape(t, missTokens) {
+function shape(t, missTokens, missUsd) {
   const think = t.output ? (t.usdOutput * t.thinking) / t.output : 0;
   return {
     'чтение кеша': [t.cacheRead, t.usdCacheRead],
@@ -73,15 +73,16 @@ function shape(t, missTokens) {
     генерация: [t.output - t.thinking, t.usdOutput - think],
     размышления: [t.thinking, think],
     'свежий вход': [t.input, t.usdInput],
-    'промахи кеша': [missTokens, (missTokens * (10 - 0.5)) / 1e6],
+    'промахи кеша': [missTokens, missUsd],
   };
 }
 
-const emptyBucket = () => ({ totals: emptyTotals(), missTokens: 0, usd: 0, turns: 0, requests: 0, tools: {} });
+const emptyBucket = () => ({ totals: emptyTotals(), missTokens: 0, missUsd: 0, usd: 0, turns: 0, requests: 0, tools: {} });
 
 function bucketAdd(b, turn) {
   addTotals(b.totals, turn.totals);
   b.missTokens += turn.missTokens || 0;
+  b.missUsd += missUsdOf(turn.totals, turn.missTokens || 0);
   b.usd += turn.usd || 0;
   b.turns += 1;
   b.requests += turn.requests || 0;
@@ -154,18 +155,18 @@ if (BY === 'tool') {
   console.log(`${pad(BY, width)} ${padL('перезаписано', 13)} ${padL('цена', 8)} ${padL('доля ходов', 11)}`);
   for (const [k, v] of shown) {
     const withMiss = v.missTokens > 0 ? 1 : 0;
-    console.log(`${pad(k, width)} ${padL(fmtTokens(v.missTokens), 13)} ${padL(fmtUsd((v.missTokens * 9.5) / 1e6), 8)} ${padL(withMiss ? 'есть' : '—', 11)}`);
+    console.log(`${pad(k, width)} ${padL(fmtTokens(v.missTokens), 13)} ${padL(fmtUsd(v.missUsd), 8)} ${padL(withMiss ? 'есть' : '—', 11)}`);
   }
-  console.log(`\nвсего перезаписано ${fmtTokens(grand.missTokens)} = ${fmtUsd((grand.missTokens * 9.5) / 1e6)} (ставка записи минус ставка чтения)`);
+  console.log(`\nвсего перезаписано ${fmtTokens(grand.missTokens)} = ${fmtUsd(grand.missUsd)} (ставка записи минус ставка чтения модели хода)`);
 } else {
   const articles = Object.keys(shape(emptyTotals(), 0));
   console.log(`${pad(BY, width)} ${padL('$', 9)} ${padL('ходов', 6)} ${articles.map((a) => padL(a, 15)).join('')}`);
   for (const [k, v] of shown) {
-    const s = shape(v.totals, v.missTokens);
+    const s = shape(v.totals, v.missTokens, v.missUsd);
     const cells = articles.map((a) => padL(`${fmtTokens(s[a][0])}/${fmtUsd(s[a][1])}`, 15)).join('');
     console.log(`${pad(k, width)} ${padL(fmtUsd(v.usd), 9)} ${padL(v.turns, 6)} ${cells}`);
   }
-  const gs = shape(grand.totals, grand.missTokens);
+  const gs = shape(grand.totals, grand.missTokens, grand.missUsd);
   console.log(`${pad('ИТОГО', width)} ${padL(fmtUsd(grand.usd), 9)} ${padL(grand.turns, 6)} ${articles.map((a) => padL(`${fmtTokens(gs[a][0])}/${fmtUsd(gs[a][1])}`, 15)).join('')}`);
 }
 

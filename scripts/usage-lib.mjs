@@ -193,6 +193,15 @@ export function tableSize(usage) {
   return (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
 }
 
+// Цена промаха кэша — разница ставок записи и чтения, взятых из цен самого хода: у каждой модели своя.
+export function missUsdOf(totals, missTokens) {
+  const written = totals.cacheWrite1h + totals.cacheWrite5m;
+  if (!missTokens || !written) return 0;
+  const write = (totals.usdCacheWrite1h + totals.usdCacheWrite5m) / written;
+  const read = totals.cacheRead ? totals.usdCacheRead / totals.cacheRead : 0;
+  return missTokens * (write - read);
+}
+
 // Scan JSONL text, deduplicating by requestId; seen is a Set carried across calls.
 // Returns the last priced record so callers can show the cost of one request.
 export function scanTranscript(text, seen, byModel, ctx) {
