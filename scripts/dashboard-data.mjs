@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  cacheDir, emptyTotals, addTotals, scanTranscript, sumModels, isRealRequest, normalizeModel, retention,
+  cacheDir, emptyTotals, addTotals, scanTranscript, sumModels, isRealRequest, normalizeModel,
   priceRecord, PRICES,
 } from './usage-lib.mjs';
 import { updateArchive } from './archive.mjs';
@@ -298,9 +298,6 @@ if (!dir || !fs.existsSync(dir)) {
   process.exit(1);
 }
 const dir2 = cacheDir();
-// Служебные файлы состояния копятся сами по себе; чистка идёт не чаще раза в сутки
-// и не трогает каталоги, поэтому архив её переживает.
-try { retention(dir2); } catch { /* чистка не должна ронять сбор данных */ }
 const out = path.join(dir2, 'dashboard.json');
 const data = build(dir);
 // The hook's cwd follows the shell into subfolders, so it names the project only

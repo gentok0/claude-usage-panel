@@ -249,31 +249,6 @@ export function cacheDir() {
   return dir;
 }
 
-// Delete state files older than `days`; runs at most once per calendar day.
-export function retention(dir, days = 14) {
-  const stamp = path.join(dir, '.last-cleanup');
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    if (fs.readFileSync(stamp, 'utf8').trim() === today) return;
-  } catch {
-    /* first run */
-  }
-  const cutoff = Date.now() - days * 86400e3;
-  for (const name of fs.readdirSync(dir)) {
-    if (name.startsWith('.')) continue;
-    const p = path.join(dir, name);
-    try {
-      const st = fs.statSync(p);
-      // Только собственные файлы состояния. Архив это каталог, и он живёт вечно:
-      // он и есть копия, переживающая журналы.
-      if (!st.isDirectory() && st.mtimeMs < cutoff) fs.unlinkSync(p);
-    } catch {
-      /* ignore */
-    }
-  }
-  fs.writeFileSync(stamp, today);
-}
-
 export function fmtTokens(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K';
