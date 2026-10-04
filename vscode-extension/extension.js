@@ -7,6 +7,8 @@ const HOME = process.env.CLAUDE_USAGE_DIR || path.join(os.homedir(), '.claude', 
 const DATA = path.join(HOME, 'dashboard.json');
 const ARCHIVE = path.join(HOME, 'archive');
 const FILES = path.join(ARCHIVE, 'files');
+const PAGE = path.join(HOME, 'panel.html');
+const mtimeOf = (file) => { try { return fs.statSync(file).mtimeMs; } catch { return 0; } };
 const MONTH_FILE = /^\d{4}-\d{2}\.json$/;
 
 // Открывает только вложения архива: путь приходит со страницы, и всё за пределами
@@ -62,10 +64,16 @@ class Dashboard {
     this.monthSet = '';
   }
 
+  // Страницу кладёт в папку данных установщик плагина: новая страница приходит вместе с плагином,
+  // без нового расширения. Своя копия — на случай, когда там её ещё нет.
+  page() {
+    try { return fs.readFileSync(PAGE, 'utf8'); } catch { return fs.readFileSync(path.join(this.context.extensionPath, 'panel.html'), 'utf8'); }
+  }
+
   resolveWebviewView(view) {
     this.view = view;
     view.webview.options = { enableScripts: true };
-    view.webview.html = fs.readFileSync(path.join(this.context.extensionPath, 'panel.html'), 'utf8');
+    view.webview.html = this.page();
     view.webview.onDidReceiveMessage((m) => {
       if (m === 'ready') this.push();
       // Asked for only when the period is "all time": the archive is the whole
@@ -77,10 +85,13 @@ class Dashboard {
     // The counter rewrites the file on every tick; fs.watch misses some writes on
     // Windows, so a slow poll of the mtime backs it up.
     let seen = 0;
+    let pageAt = mtimeOf(PAGE);
     const timer = setInterval(() => {
-      let m = 0;
-      try { m = fs.statSync(DATA).mtimeMs; } catch { /* not yet */ }
+      const m = mtimeOf(DATA);
       if (m !== seen) { seen = m; this.push(); }
+      // Обновлённая страница подменяется сразу — перезагружать окно ради неё не нужно.
+      const p = mtimeOf(PAGE);
+      if (p !== pageAt) { pageAt = p; view.webview.html = this.page(); }
       // The current month changes on every tick, but those turns are in the window
       // anyway — only a new month file adds anything the panel does not have.
       if (this.wantArchive) {

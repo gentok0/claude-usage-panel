@@ -15,6 +15,8 @@ const WITH_DATA = process.argv.includes('--data');
 
 const extRoot = path.join(os.homedir(), '.vscode', 'extensions');
 const dataDir = process.env.CLAUDE_USAGE_DIR || path.join(os.homedir(), '.claude', 'usage-counter');
+// Страница панели — часть расширения, а не данных: уходит вместе с ним.
+const page = path.join(dataDir, 'panel.html');
 
 // Версия входит в имя папки, поэтому после обновлений их может лежать несколько.
 const extDirs = fs.existsSync(extRoot)
@@ -41,6 +43,7 @@ function describeData() {
 
 if (!extDirs.length) console.log('— расширения VS Code нет, удалять нечего');
 for (const name of extDirs) console.log(`− расширение VS Code → ${path.join(extRoot, name)}`);
+if (!WITH_DATA && fs.existsSync(page)) console.log(`− страница панели → ${page}`);
 
 if (WITH_DATA) {
   if (fs.existsSync(dataDir)) {
@@ -61,6 +64,7 @@ if (DRY) {
 }
 
 for (const name of extDirs) fs.rmSync(path.join(extRoot, name), { recursive: true, force: true });
+fs.rmSync(page, { force: true });
 if (WITH_DATA) fs.rmSync(dataDir, { recursive: true, force: true });
 
 console.log('\nготово. осталось убрать сам плагин командами клиента:');
