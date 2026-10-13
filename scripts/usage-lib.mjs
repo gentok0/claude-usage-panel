@@ -240,6 +240,18 @@ export function sumModels(byModel) {
   return out;
 }
 
+// Who sent a user record. Since client 2.1.229 a message a person typed carries origin.kind "human"
+// and one a program sent carries turnOrigin "sdk"; what the client writes in the person's name itself —
+// a safety-filter notice, a hook's refusal, a screenshot path — carries neither, and the summary after
+// compaction, though it may carry turnOrigin "human", is marked isCompactSummary. true: a person or a
+// program sent it; false: the client did; null: the journal has no marks, so the caller's list decides.
+export const senderMarks = (text) => /"origin":\{"kind":"human"|"turnOrigin":"sdk"/.test(text);
+export function sentByPerson(rec, marks) {
+  const [a = 0, b = 0, c = 0] = String(rec.version || '').split('.').map(Number);
+  if (!marks || a * 1e6 + b * 1e3 + c < 2001229) return null;
+  return !rec.isCompactSummary && (rec.origin?.kind === 'human' || rec.turnOrigin === 'sdk');
+}
+
 // The same folder without creating it: a reader must leave no trace on disk.
 export const cacheRoot = () => process.env.CLAUDE_USAGE_DIR || path.join(os.homedir(), '.claude', 'usage-counter');
 

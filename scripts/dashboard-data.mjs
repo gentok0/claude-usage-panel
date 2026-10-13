@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   cacheDir, emptyTotals, addTotals, scanTranscript, sumModels, isRealRequest, normalizeModel,
-  priceRecord, PRICES,
+  priceRecord, PRICES, senderMarks, sentByPerson,
 } from './usage-lib.mjs';
 import { updateArchive } from './archive.mjs';
 import { attachmentsOf, saveAttachments } from './attachments.mjs';
@@ -28,11 +28,11 @@ const QUOTE_MIN = 30;
 // The client wraps its own notes into the same text blocks as the user's words:
 // IDE pointers, reminders, task notifications, skill preambles.
 const NOISE_TAGS = /<(ide_[a-z_]+|system-reminder|task-notification|command-[a-z-]+|local-command-[a-z]+)>[\s\S]*?<\/\1>/g;
-// Часть записей от лица человека пишет сам клиент: пометку о скриншоте, прерывание,
-// продолжение после него. Если считать их ходами, разговор рвётся — подпись остаётся
-// в одной строке, деньги уходят в другую. Отсекаем: расход ложится на слова человека.
-// Проверено по журналам: за прерыванием и продолжением не стоит ни одного запроса к
-// модели, тогда как за раскрытой слэш-командой стоят — её отсекать нельзя.
+// Часть записей от лица человека пишет сам клиент. Если считать их ходами, разговор рвётся —
+// подпись остаётся в одной строке, деньги уходят в другую. Ход открывает только сообщение
+// с пометкой «прислал человек» (sentByPerson), а этот перечень решает лишь в журналах без пометок.
+// За прерыванием и продолжением не стоит ни одного запроса к модели, за раскрытой слэш-командой
+// стоят — её отсекать нельзя.
 const SERVICE_PREFIX = /^(Stop hook feedback:|Base directory for this skill:|Caveat:|<command-name>|\[Image: source:|\[Image: original|\[Request interrupted|Continue from where you left off)/;
 
 // Вставленный текст клиент оборачивает тегом с атрибутом: обёртку снимаем, сам текст — слова человека.
@@ -82,6 +82,9 @@ function userText(rec) {
   return strip(raw) ? raw : '';
 }
 
+// A typed slash command is the person's message, though all its text sits inside the client's tags.
+const commandOf = (rec) => blocksText(rec.message?.content).match(/<command-name>([^<]+)<\/command-name>/)?.[1].trim() || '';
+
 function assistantText(rec) {
   const c = rec.message?.content;
   if (!Array.isArray(c)) return '';
@@ -100,6 +103,7 @@ function newThread(project, id) {
 
 function readLog(file, thread, seen, unpriced) {
   const text = fs.readFileSync(file, 'utf8');
+  const marks = senderMarks(text);
   let turn = null;
   let lastAnswer = '';
   let lastPrompt = '';
@@ -139,7 +143,8 @@ function readLog(file, thread, seen, unpriced) {
       // The text of a skill or command the client inserts on my call points at that call:
       // it is not the person's words and opens no turn.
       if (rec.sourceToolUseID) continue;
-      const t = userText(rec);
+      const person = sentByPerson(rec, marks);
+      const t = person === false ? '' : userText(rec) || (person ? commandOf(rec) : '');
       const files = rec.isMeta ? [] : saveAttachments(thread.id, rec.timestamp, attachmentsOf(rec.message?.content), STORE);
       // A picture sent without words opens no turn, so it stays with the running one,
       // the same one its requests go to.
