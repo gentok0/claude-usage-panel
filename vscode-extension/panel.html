@@ -254,14 +254,30 @@ function missUsdOf(t, missTokens) {
   return missTokens * (write - read);
 }
 
+// Причину промаха называет сервер; незнакомый тип показывается как есть.
+const MISS_REASONS = {
+  previous_message_not_found: 'в кэше не найдено предыдущее сообщение',
+  model_changed: 'сменилась модель',
+  messages_changed: 'изменилась история разговора',
+  system_changed: 'изменился системный промпт',
+  tools_changed: 'изменились инструменты',
+  unavailable: 'причина недоступна',
+};
+function missTip(reasons) {
+  if (!reasons || !reasons.length) return '';
+  const lines = reasons.map((r) => (MISS_REASONS[r.type] || r.type)
+    + (r.cache_missed_input_tokens ? ` — ${tok(r.cache_missed_input_tokens)} токенов` : ''));
+  return ['причина по данным сервера:', ...lines].join('\n');
+}
+
 // One cell per article, always in the same column, so rows compare vertically.
-function articleCells(s) {
+function articleCells(s, tip = '') {
   const max = Math.max(...ARTICLES.map(([, , m]) => s[m]));
   return ARTICLES.map(([, k, m]) => {
     if (k === 'input' && !showInput) return '';
     // Fresh input below the threshold is noise; its appearance is the signal.
     if (s[k] === 0 || (k === 'input' && s[k] <= INPUT_MIN)) return DASH;
-    const missNote = k === 'write' && s.missUsd > 0 ? ` <span class="miss">пром ${usd(s.missUsd)}</span>` : '';
+    const missNote = k === 'write' && s.missUsd > 0 ? ` <span class="miss"${tip ? ` title="${esc(tip)}"` : ''}>пром ${usd(s.missUsd)}</span>` : '';
     return `<span class="num ${s[m] === max ? 'top' : ''}"><b>${tok(s[k])}/${usd(s[m])}</b>${missNote}</span>`;
   }).join('');
 }
@@ -485,7 +501,7 @@ function threadRows(t) {
     <span class="muted">${when(x.at)}</span>
     ${DASH}
     <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
-    ${articleCells(shape(x.totals, x.missTokens))}
+    ${articleCells(shape(x.totals, x.missTokens), missTip(x.missReasons))}
     ${tableCell(x.table, x.compactAt || limitTokens)}
   </div>` + (shown ? `<div class="qt">${body}</div>` : '');
   }).join('');

@@ -103,10 +103,14 @@ function readLog(file, thread, seen, unpriced) {
   let turn = null;
   let lastAnswer = '';
   let lastPrompt = '';
+  const events = new Set();
   for (const line of text.split('\n')) {
     if (!line || line[0] !== '{') continue;
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
+    // Клиент изредка дописывает повтор уже записанной истории теми же записями — это не новые ходы.
+    if (rec.uuid && events.has(rec.uuid)) continue;
+    if (rec.uuid) events.add(rec.uuid);
 
     if (rec.aiTitle) thread.title = rec.aiTitle;
     // A thread the client never named it labels with the last message; the panel does the same.
@@ -206,7 +210,17 @@ function readLog(file, thread, seen, unpriced) {
     turn.table = thread.table;
     turn.usd += priced.usd;
     turn.requests += 1;
+    // Кому клиент относит запрос: хранится для анализа трат, панель это не рисует.
+    for (const [field, name] of [['skills', rec.attributionSkill], ['plugins', rec.attributionPlugin]]) {
+      if (!name) continue;
+      const slot = ((turn[field] ||= {})[name] ||= { requests: 0, usd: 0 });
+      slot.requests += 1;
+      slot.usd += priced.usd;
+    }
     turn.missTokens += miss;
+    // Причину промаха называет сервер; панель показывает её подсказкой у промаха запроса.
+    const reason = miss ? rec.message.diagnostics?.cache_miss_reason : null;
+    if (reason) (turn.missReasons ||= []).push(reason);
     turn.model = rec.message.model || turn.model;
     turn.effort = rec.effort || turn.effort;
     turn.geo = u.inference_geo || turn.geo;
