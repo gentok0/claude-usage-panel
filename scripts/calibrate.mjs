@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { cacheDir, isRealRequest, normalizeModel, scanTranscript, fmtUsd } from './usage-lib.mjs';
 
 const argv = process.argv.slice(2);
@@ -222,7 +222,8 @@ fs.writeFileSync(file, JSON.stringify({ ...current, multiplier: Number(ratio.toF
 console.log(`записано в ${file}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Запущен ли скрипт напрямую: Node отдаёт настоящий путь модуля, а argv — как набрали, в том числе через ссылку.
+if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (has('--rates')) writeRates();
   else main();
 }
