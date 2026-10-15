@@ -108,6 +108,7 @@ function readLog(file, thread, seen, unpriced) {
   let lastAnswer = '';
   let lastPrompt = '';
   const events = new Set();
+  const asks = new Map();
   for (const line of text.split('\n')) {
     if (!line || line[0] !== '{') continue;
     let rec;
@@ -170,10 +171,17 @@ function readLog(file, thread, seen, unpriced) {
     if (rec.type === 'assistant') {
       const a = assistantText(rec);
       if (a) lastAnswer = a;
-      // Чем занят ход: «на что ушли деньги» почти всегда упирается в инструменты.
-      if (turn && Array.isArray(rec.message?.content)) {
+      // Чем занят ход: «на что ушли деньги» почти всегда упирается в инструменты. Ответ пишется по блоку
+      // на запись, поэтому символы текста и входов вызовов копятся по запросу со всех его записей.
+      if (Array.isArray(rec.message?.content)) {
+        const id = rec.requestId || rec.uuid;
+        const ask = asks.get(id) || { text: 0, tools: {} };
+        asks.set(id, ask);
         for (const b of rec.message.content) {
-          if (b.type === 'tool_use' && b.name) turn.tools[b.name] = (turn.tools[b.name] || 0) + 1;
+          if (b.type === 'text') ask.text += (b.text || '').length;
+          if (b.type !== 'tool_use' || !b.name) continue;
+          if (turn) turn.tools[b.name] = (turn.tools[b.name] || 0) + 1;
+          ask.tools[b.name] = (ask.tools[b.name] || 0) + JSON.stringify(b.input ?? {}).length;
         }
       }
     }
@@ -246,8 +254,28 @@ function readLog(file, thread, seen, unpriced) {
     const cost = (usage) => priceRecord({ ...usage, speed: u.speed, inference_geo: u.inference_geo }, rec.message.model).usd;
     turn.entryLive = known ? cost({ cache_read_input_tokens: turn.table }) : null;
     turn.entryCold = known ? cost({ cache_creation: { ephemeral_1h_input_tokens: turn.table } }) : null;
+    const ask = asks.get(rec.requestId || rec.uuid);
+    if (ask) Object.assign(ask, { turn, seq: thread.requests, gen: priced.output - priced.thinking,
+      genUsd: priced.output ? (priced.usdOutput * (priced.output - priced.thinking)) / priced.output : 0,
+      readRate: known ? cost({ cache_read_input_tokens: 1e6 }) / 1e6 : 0 });
   }
   if (!thread.title) thread.title = lastPrompt;
+  // Входы вызовов — оценка: клиент не сообщает, сколько токенов ушло на них. Генерация запроса без размышлений
+  // делится с текстом ответа по доле символов; перечитывание — те же токены в каждом следующем запросе треда по ставке чтения кэша.
+  for (const ask of asks.values()) {
+    const chars = Object.values(ask.tools).reduce((s, n) => s + n, 0);
+    if (!ask.turn || !chars) continue;
+    const later = thread.requests - ask.seq;
+    for (const [name, n] of Object.entries(ask.tools)) {
+      const tokens = (ask.gen * n) / (chars + ask.text);
+      const slot = ((ask.turn.toolInputs ||= {})[name] ||= { chars: 0, tokens: 0, usd: 0, rereadTokens: 0, rereadUsd: 0 });
+      slot.chars += n;
+      slot.tokens += tokens;
+      slot.usd += (ask.genUsd * n) / (chars + ask.text);
+      slot.rereadTokens += tokens * later;
+      slot.rereadUsd += tokens * later * ask.readRate;
+    }
+  }
 }
 
 function build(currentDir) {

@@ -9,6 +9,7 @@
 //   node usage-query.mjs --by thread --top 5          самые дорогие треды
 //   node usage-query.mjs --days 7 --by tool           чем занимались ходы
 //   node usage-query.mjs --days 7 --misses            промахи кэша и их цена
+//   node usage-query.mjs --days 7 --tool-inputs --by tool   во что обходятся входы вызовов: генерация и перечитывание, оценка
 //   node usage-query.mjs --search "кеш" --by thread   только ходы с фразой
 //   --project all       все проекты (по умолчанию — текущий)
 //   --from 2026-09-05 --to 2026-09-11   свои границы вместо --days
@@ -37,6 +38,7 @@ const PROJECT = arg('--project', '');
 const DAYS = arg('--days', '');
 const FROM = arg('--from', '');
 const TO = arg('--to', '');
+const INPUTS = has('--tool-inputs');
 
 // Календарные сутки по местному времени — «день» у человека начинается в полночь,
 // а не 24 часа назад.
@@ -77,9 +79,10 @@ function shape(t, missTokens, missUsd) {
   };
 }
 
-const emptyBucket = () => ({ totals: emptyTotals(), missTokens: 0, missUsd: 0, usd: 0, turns: 0, requests: 0, tools: {} });
+const emptyBucket = () => ({ totals: emptyTotals(), missTokens: 0, missUsd: 0, usd: 0, turns: 0, requests: 0, tools: {},
+  inputs: { tokens: 0, usd: 0, rereadTokens: 0, rereadUsd: 0 } });
 
-function bucketAdd(b, turn) {
+function bucketAdd(b, turn, tool) {
   addTotals(b.totals, turn.totals);
   b.missTokens += turn.missTokens || 0;
   b.missUsd += missUsdOf(turn.totals, turn.missTokens || 0);
@@ -87,6 +90,11 @@ function bucketAdd(b, turn) {
   b.turns += 1;
   b.requests += turn.requests || 0;
   for (const [name, n] of Object.entries(turn.tools || {})) b.tools[name] = (b.tools[name] || 0) + n;
+  // В разрезе по инструментам входы вызовов — только этого инструмента, в остальных — все.
+  for (const [name, slot] of Object.entries(turn.toolInputs || {})) {
+    if (tool && name !== tool) continue;
+    for (const k of Object.keys(b.inputs)) b.inputs[k] += slot[k] || 0;
+  }
 }
 
 const data = load();
@@ -118,13 +126,14 @@ for (const thread of data.threads) {
 
     for (const k of keys) {
       if (!groups.has(k)) groups.set(k, emptyBucket());
-      bucketAdd(groups.get(k), turn);
+      bucketAdd(groups.get(k), turn, BY === 'tool' ? k : '');
     }
     bucketAdd(grand, turn);
   }
 }
 
-const rows = [...groups.entries()].sort((a, b) => (BY === 'day' ? (a[0] < b[0] ? 1 : -1) : b[1].usd - a[1].usd));
+const weight = (v) => (INPUTS ? v.inputs.usd + v.inputs.rereadUsd : v.usd);
+const rows = [...groups.entries()].sort((a, b) => (BY === 'day' ? (a[0] < b[0] ? 1 : -1) : weight(b[1]) - weight(a[1])));
 const shown = TOP ? rows.slice(0, TOP) : rows;
 
 if (has('--json')) {
@@ -142,7 +151,13 @@ const pad = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` 
 const padL = (s, n) => String(s).padStart(n);
 const width = Math.min(42, Math.max(12, ...shown.map(([k]) => k.length)));
 
-if (BY === 'tool') {
+if (INPUTS) {
+  const row = (k, v) => `${pad(k, width)} ${padL(fmtTokens(Math.round(v.inputs.tokens)), 12)} ${padL(fmtUsd(v.inputs.usd), 11)} ${padL(fmtTokens(Math.round(v.inputs.rereadTokens)), 12)} ${padL(fmtUsd(v.inputs.rereadUsd), 14)}`;
+  console.log(`${pad(BY, width)} ${padL('входы, ток.', 12)} ${padL('генерация', 11)} ${padL('перечитано', 12)} ${padL('перечитывание', 14)}`);
+  for (const [k, v] of shown) console.log(row(k, v));
+  console.log(row('ИТОГО', grand));
+  console.log('\nоценка: клиент не сообщает, сколько токенов ушло на входы вызовов. Генерация запроса без размышлений делится между текстом ответа и входами по доле символов, перечитывание — те же токены в каждом следующем запросе треда по ставке чтения кэша.');
+} else if (BY === 'tool') {
   // У инструмента нет своей цены: он не запрос. Честная единица — сколько раз вызван
   // и в скольких ходах встретился; деньги ходов показаны рядом как контекст.
   console.log(`${pad('инструмент', width)} ${padL('вызовов', 8)} ${padL('ходов', 7)} ${padL('$ этих ходов', 14)}`);

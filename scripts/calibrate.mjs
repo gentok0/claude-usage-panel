@@ -164,14 +164,14 @@ const metric = parseTelemetry(out);
 
 if (metric.usd === null) {
   console.error(`клиент не отдал метрику стоимости (код ${run.status}).`);
-  console.error('возможные причины: клиент не найден по пути, старая версия, вход не выполнен.');
+  console.error('возможные причины: клиент не найден по пути — тогда передай --claude <путь>; старая версия клиента или не выполнен вход — это проверяет пользователь.');
   console.error(out.slice(-600).trim() || '(пустой вывод)');
   process.exit(1);
 }
 
 const journal = path.join(PROJECTS, encodeProject(room), `${metric.session}.jsonl`);
 if (!fs.existsSync(journal)) {
-  console.error(`журнал пробного запроса не найден: ${journal}`);
+  console.error(`журнал пробного запроса не найден: ${journal} — повтори сверку; не нашёлся снова — скажи пользователю, что клиент пишет журналы не туда, где их ищет панель, и это правка панели`);
   process.exit(1);
 }
 
