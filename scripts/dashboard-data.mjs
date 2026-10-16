@@ -339,6 +339,8 @@ async function projectDir() {
 }
 
 const dir = await projectDir();
+// Первый тред нового проекта: хук приходит раньше, чем клиент заводит папку журналов, — собирать пока нечего.
+if (dir && !fs.existsSync(dir) && !process.argv.includes('--dir')) process.exit(0);
 if (!dir || !fs.existsSync(dir)) {
   process.stdout.write(`не указана папка проекта: передай --dir <папка в ${PROJECTS}> или подай JSON хука на stdin\n`);
   process.exit(1);
