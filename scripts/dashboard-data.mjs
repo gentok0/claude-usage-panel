@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   cacheDir, emptyTotals, addTotals, scanTranscript, sumModels, isRealRequest, normalizeModel,
-  priceRecord, PRICES, senderMarks, sentByPerson,
+  priceRecord, PRICES, senderMarks, sentByPerson, namesJournalDir,
 } from './usage-lib.mjs';
 import { updateArchive } from './archive.mjs';
 import { attachmentsOf, saveAttachments } from './attachments.mjs';
@@ -91,7 +91,6 @@ function assistantText(rec) {
   return c.filter((b) => b.type === 'text').map((b) => b.text || '').join(' ');
 }
 
-const encodeProject = (dir) => dir.replace(/[\\/:]/g, '-').toLowerCase();
 
 function newThread(project, id) {
   return {
@@ -299,12 +298,12 @@ function build(currentDir) {
   }
   threads.sort((a, b) => (a.lastAt < b.lastAt ? 1 : -1));
   // A project is named by its own root, not by whichever folder a session wandered
-  // into: the journal directory name is the root path with separators replaced, so
-  // the cwd that encodes back to it is the root. Threads of one project share it.
+  // into: the client builds the journal directory name from the root path, so the
+  // cwd that names it is the root. Threads of one project share it.
   const roots = new Map();
   for (const t of threads) {
     if (!t.dir || roots.get(t.project)) continue;
-    if (encodeProject(t.dir) === t.project.toLowerCase()) roots.set(t.project, t.dir);
+    if (namesJournalDir(t.project, t.dir)) roots.set(t.project, t.dir);
   }
   const label = (project, dir) => {
     const root = roots.get(project) || dir;

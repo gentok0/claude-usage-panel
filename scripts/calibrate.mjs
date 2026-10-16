@@ -20,7 +20,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { cacheDir, isRealRequest, normalizeModel, scanTranscript, fmtUsd } from './usage-lib.mjs';
+import { cacheDir, isRealRequest, normalizeModel, scanTranscript, fmtUsd, journalDirOf } from './usage-lib.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => {
@@ -30,7 +30,7 @@ const arg = (name, dflt) => {
 const has = (name) => argv.includes(name);
 
 const PROJECTS = path.join(os.homedir(), '.claude', 'projects');
-const encodeProject = (dir) => dir.replace(/[\\/:]/g, '-').toLowerCase();
+
 const pricesFile = () => path.join(process.env.CLAUDE_PLUGIN_DATA || cacheDir(), 'prices.json');
 const readPrices = (file) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
 const RATE_KEYS = ['in', 'w5m', 'w1h', 'read', 'out'];
@@ -169,8 +169,9 @@ if (metric.usd === null) {
   process.exit(1);
 }
 
-const journal = path.join(PROJECTS, encodeProject(room), `${metric.session}.jsonl`);
-if (!fs.existsSync(journal)) {
+const sessionDir = journalDirOf(room);
+const journal = path.join(sessionDir || PROJECTS, `${metric.session}.jsonl`);
+if (!sessionDir || !fs.existsSync(journal)) {
   console.error(`журнал пробного запроса не найден: ${journal} — повтори сверку; не нашёлся снова — скажи пользователю, что клиент пишет журналы не туда, где их ищет панель, и это правка панели`);
   process.exit(1);
 }
@@ -183,7 +184,7 @@ const tokensMatch =
   (metric.tokens.cacheCreation ?? 0) === ours.totals.cacheCreation;
 
 if (!has('--keep')) {
-  fs.rmSync(path.join(PROJECTS, encodeProject(room)), { recursive: true, force: true });
+  fs.rmSync(sessionDir, { recursive: true, force: true });
   dropFromArchive(metric.session);
 }
 fs.rmSync(room, { recursive: true, force: true });

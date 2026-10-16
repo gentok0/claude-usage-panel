@@ -252,6 +252,45 @@ export function sentByPerson(rec, marks) {
   return !rec.isCompactSummary && (rec.origin?.kind === 'human' || rec.turnOrigin === 'sdk');
 }
 
+// The client names a project's journal folder after the project's path: every character other than a
+// Latin letter or digit becomes "-", and a name longer than 200 characters is cut and given a hash.
+const foldCase = (s) => (process.platform === 'linux' ? s : s.toLowerCase());
+export function namesJournalDir(name, dir) {
+  const encoded = foldCase(String(dir).replace(/[^a-zA-Z0-9]/g, '-'));
+  const n = foldCase(String(name));
+  return encoded.length <= 200 ? n === encoded : n.startsWith(`${encoded.slice(0, 200)}-`);
+}
+
+// A project's journal folder, or null. By name first — for the path as given and for its real path,
+// which is what the client sees on macOS; then by the working folder written in the journals themselves,
+// so the folder is found whatever the client's naming turns out to be.
+export function journalDirOf(dir, root = path.join(os.homedir(), '.claude', 'projects')) {
+  const wants = [String(dir)];
+  try { wants.push(fs.realpathSync(String(dir))); } catch {}
+  let names;
+  try { names = fs.readdirSync(root).filter((n) => fs.statSync(path.join(root, n)).isDirectory()); } catch { return null; }
+  const named = names.find((n) => wants.some((w) => namesJournalDir(n, w)));
+  if (named) return path.join(root, named);
+  for (const n of names) {
+    const journal = fs.readdirSync(path.join(root, n)).find((f) => f.endsWith('.jsonl'));
+    const cwd = journal && firstCwd(path.join(root, n, journal));
+    if (cwd && wants.some((w) => foldCase(w) === foldCase(cwd))) return path.join(root, n);
+  }
+  return null;
+}
+
+// The working folder sits in the first record that has one; a journal can run to tens of megabytes.
+function firstCwd(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const head = Buffer.alloc(65536);
+    const n = fs.readSync(fd, head, 0, head.length, 0);
+    const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(head.toString('utf8', 0, n));
+    return m ? JSON.parse(`"${m[1]}"`) : null;
+  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
 // The same folder without creating it: a reader must leave no trace on disk.
 export const cacheRoot = () => process.env.CLAUDE_USAGE_DIR || path.join(os.homedir(), '.claude', 'usage-counter');
 
