@@ -35,11 +35,13 @@ function scoped(data) {
   const folder = (vscode.workspace?.workspaceFolders || [])[0];
   if (!folder) return data;
   const dir = folder.uri.fsPath;
-  // Тем же способом, каким сборщик кодирует путь в имя папки журналов; регистр
-  // у той папки свой, поэтому сравнение идёт в нижнем.
-  const code = dir.replace(/[\\/:]/g, '-').toLowerCase();
-  const own = (data.threads || []).find((t) => t.project.toLowerCase() === code);
-  return { ...data, current: own ? own.project : code, currentLabel: path.basename(dir) };
+  // Свой проект — тот, чьи треды начинались в этой папке: путь клиент пишет в журнал целиком, а имя папки
+  // журналов собирает из него с потерями. «й» и «ё» бывают одним знаком и двумя, а на macOS клиент видит настоящий путь.
+  const key = (p) => { const s = String(p).normalize('NFC'); return process.platform === 'linux' ? s : s.toLowerCase(); };
+  const keys = new Set([key(dir)]);
+  try { keys.add(key(fs.realpathSync(dir))); } catch { /* папки нет */ }
+  const own = (data.threads || []).find((t) => t.dir && keys.has(key(t.dir)));
+  return { ...data, current: own ? own.project : '', currentLabel: path.basename(dir) };
 }
 
 const months = () => {

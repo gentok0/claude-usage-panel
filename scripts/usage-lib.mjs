@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { StringDecoder } from 'node:string_decoder';
 
 const OPUS = { in: 5, w5m: 6.25, w1h: 10, read: 0.5, out: 25 };
 const OPUS_FAST = { in: 10, w5m: 12.5, w1h: 20, read: 1, out: 50 };
@@ -262,32 +263,41 @@ export function namesJournalDir(name, dir) {
 }
 
 // A project's journal folder, or null. By name first — for the path as given and for its real path,
-// which is what the client sees on macOS; then by the working folder written in the journals themselves,
-// so the folder is found whatever the client's naming turns out to be.
+// which is what the client sees on macOS, each with «й» and «ё» spelled as one character and as two:
+// macOS hands out the spelling the folder was created with. Then by the working folder written in the
+// journals themselves, so the folder is found whatever the client's naming turns out to be.
 export function journalDirOf(dir, root = path.join(os.homedir(), '.claude', 'projects')) {
-  const wants = [String(dir)];
-  try { wants.push(fs.realpathSync(String(dir))); } catch {}
+  const given = [String(dir)];
+  try { given.push(fs.realpathSync(String(dir))); } catch {}
+  const wants = given.flatMap((w) => [w.normalize('NFC'), w.normalize('NFD')]);
   let names;
   try { names = fs.readdirSync(root).filter((n) => fs.statSync(path.join(root, n)).isDirectory()); } catch { return null; }
   const named = names.find((n) => wants.some((w) => namesJournalDir(n, w)));
   if (named) return path.join(root, named);
+  const same = (a, b) => foldCase(a.normalize('NFC')) === foldCase(b.normalize('NFC'));
   for (const n of names) {
-    const journal = fs.readdirSync(path.join(root, n)).find((f) => f.endsWith('.jsonl'));
-    const cwd = journal && firstCwd(path.join(root, n, journal));
-    if (cwd && wants.some((w) => foldCase(w) === foldCase(cwd))) return path.join(root, n);
+    let cwd = null;
+    for (const f of fs.readdirSync(path.join(root, n))) if (!cwd && f.endsWith('.jsonl')) cwd = firstCwd(path.join(root, n, f));
+    if (cwd && wants.some((w) => same(w, cwd))) return path.join(root, n);
   }
   return null;
 }
 
-// The working folder sits in the first record that has one; a journal can run to tens of megabytes.
+// The working folder sits in the first record that has one, after that record's message, and a first
+// message with pictures runs to megabytes: the journal is read on until the field turns up.
 function firstCwd(file) {
   let fd;
   try {
     fd = fs.openSync(file, 'r');
-    const head = Buffer.alloc(65536);
-    const n = fs.readSync(fd, head, 0, head.length, 0);
-    const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(head.toString('utf8', 0, n));
-    return m ? JSON.parse(`"${m[1]}"`) : null;
+    const chunk = Buffer.alloc(65536);
+    const decoder = new StringDecoder('utf8');
+    let text = '';
+    for (let n; (n = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0;) {
+      text = text.slice(-65536) + decoder.write(chunk.subarray(0, n));
+      const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(text);
+      if (m) return JSON.parse(`"${m[1]}"`);
+    }
+    return null;
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
