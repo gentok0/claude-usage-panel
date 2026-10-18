@@ -58,27 +58,30 @@ function writeRates() {
   console.log(`записано в ${file}: ${model} ${JSON.stringify(rates)}`);
 }
 
-// Модель по умолчанию — та, которой человек реально работает: считаем по свежим записям.
+// Модель по умолчанию — та, которой человек реально работает: больше всего запросов за неделю до последнего.
+// Неделя — по времени самих запросов: дату файла журнала клиент переписывает и без них.
 export function usualModel() {
-  const counts = {};
-  let newest = 0;
+  const requests = new Map();
+  let last = 0;
   for (const proj of fs.existsSync(PROJECTS) ? fs.readdirSync(PROJECTS) : []) {
     const dir = path.join(PROJECTS, proj);
     if (!fs.statSync(dir).isDirectory()) continue;
     for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))) {
-      const full = path.join(dir, file);
-      const st = fs.statSync(full);
-      if (st.mtimeMs < newest - 7 * 86400e3) continue;
-      newest = Math.max(newest, st.mtimeMs);
-      for (const line of fs.readFileSync(full, 'utf8').split('\n')) {
+      for (const line of fs.readFileSync(path.join(dir, file), 'utf8').split('\n')) {
         if (!line.includes('"model"')) continue;
         let rec;
         try { rec = JSON.parse(line); } catch { continue; }
-        if (!isRealRequest(rec)) continue;
-        const id = rec.message.model;
-        counts[id] = (counts[id] || 0) + 1;
+        const at = Date.parse(rec.timestamp);
+        if (!isRealRequest(rec) || !at) continue;
+        // Ответ модели журнал пишет по блоку на запись с тем же requestId: это один запрос.
+        requests.set(rec.requestId || `${file}:${requests.size}`, { at, model: rec.message.model });
+        last = Math.max(last, at);
       }
     }
+  }
+  const counts = {};
+  for (const { at, model } of requests.values()) {
+    if (at >= last - 7 * 86400e3) counts[model] = (counts[model] || 0) + 1;
   }
   const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
   return top ? top[0] : null;
