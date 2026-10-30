@@ -137,8 +137,9 @@ const rows = [...groups.entries()].sort((a, b) => (BY === 'day' ? (a[0] < b[0] ?
 const shown = TOP ? rows.slice(0, TOP) : rows;
 
 if (has('--json')) {
-  console.log(JSON.stringify({ by: BY, rows: shown.map(([k, v]) => ({ key: k, ...v })), total: grand }, null, 1));
-  process.exit(0);
+  // В конвейер вывод уходит частями: выходим, только когда он записан целиком, а дальше, к таблице, не идём.
+  process.stdout.write(`${JSON.stringify({ by: BY, rows: shown.map(([k, v]) => ({ key: k, ...v })), total: grand }, null, 1)}\n`, () => process.exit(0));
+  await new Promise(() => {});
 }
 
 const period = FROM || TO ? `${FROM || '…'} — ${TO || '…'}`

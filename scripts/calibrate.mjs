@@ -10,7 +10,7 @@
 //   node calibrate.mjs --apply         записать подобранный множитель в prices.json
 //   node calibrate.mjs --model <id>    сверять на другой модели (по умолчанию — ваша обычная)
 //   node calibrate.mjs --keep          не удалять журнал пробного запроса
-//   --claude <путь>                    свой путь к клиенту, если он не в PATH
+//   --claude <путь>                    свой путь к клиенту; без него — claude из PATH, а нет его там — клиент, запустивший скрипт
 //   --json                             машинный вывод
 //   node calibrate.mjs --rates <модель> in=4 w5m=5 w1h=8 read=0.2 out=20 [fast.in=8 …]
 //                                      записать ставки модели, которой нет в таблице цен ($ за миллион токенов)
@@ -143,10 +143,21 @@ function dropFromArchive(sessionId) {
   return removed;
 }
 
+// Расширение редактора не кладёт клиент в PATH, но отдаёт его путь запущенным командам — переменной вне документации.
+function clientBin() {
+  const names = process.platform === 'win32' ? ['claude.exe', 'claude.cmd'] : ['claude'];
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const own = process.env.CLAUDE_CODE_EXECPATH;
+  if (!own || dirs.some((d) => names.some((n) => fs.existsSync(path.join(d, n))))) return 'claude';
+  return `"${own}"`;
+}
+
 function main() {
 const model = arg('--model', usualModel() || 'claude-sonnet-5');
-const bin = arg('--claude', 'claude');
+const bin = arg('--claude', clientBin());
 const room = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-calibrate-'));
+// Убирается на любом выходе: ветки ошибок ниже выходят раньше конца.
+process.on('exit', () => fs.rmSync(room, { recursive: true, force: true }));
 
 const run = spawnSync(bin, ['-p', 'ok', '--model', model], {
   cwd: room,
@@ -190,8 +201,6 @@ if (!has('--keep')) {
   fs.rmSync(sessionDir, { recursive: true, force: true });
   dropFromArchive(metric.session);
 }
-fs.rmSync(room, { recursive: true, force: true });
-
 if (has('--json')) {
   console.log(JSON.stringify({ model, client: metric.usd, ours: ours.usd, ratio, tokensMatch }));
   process.exit(0);
