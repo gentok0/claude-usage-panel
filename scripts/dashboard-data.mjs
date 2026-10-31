@@ -117,6 +117,8 @@ function readLog(file, thread, seen, unpriced) {
     if (rec.uuid) events.add(rec.uuid);
 
     if (rec.aiTitle) thread.title = rec.aiTitle;
+    // Под чьим входом шла работа: по организации ход потом находит строку входа.
+    if (rec.attachment?.type === 'credential_org') (thread.orgs ||= []).push({ at: rec.timestamp, org: rec.attachment.organizationUuid });
     // A thread the client never named it labels with the last message; the panel does the same.
     if (rec.type === 'last-prompt' && rec.lastPrompt) lastPrompt = rec.lastPrompt;
     // The first cwd only: it is the folder the session started in, the one the
@@ -277,6 +279,43 @@ function readLog(file, thread, seen, unpriced) {
   }
 }
 
+// Вход клиента — чем оплачивается работа. Клиент сам пишет его в ~/.claude.json; оттуда берутся только поля входа,
+// ключей и токенов в этом файле нет. Профиль плана клиент запрашивает только при входе через claude.ai, роль
+// в рабочем пространстве бывает только у Console.
+function currentLogin() {
+  let a;
+  try { a = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')).oauthAccount; } catch { return null; }
+  if (!a?.organizationUuid) return null;
+  if (a.planDisplayName || a.billingType || a.profileFetchedAt) {
+    // Места бывают только у командных планов, Team и Enterprise: без места план личный.
+    const seat = a.seatTier ? a.seatTier[0].toUpperCase() + a.seatTier.slice(1) : '';
+    const plan = a.planDisplayName || 'подписка';
+    const line = [`биллинг: ${plan}`, seat && `место: ${seat}`, `оплата: ${seat ? 'квота места' : 'квота подписки'}`,
+      `кредиты сверх лимита: ${a.hasExtraUsageEnabled ? 'включены' : 'выключены'}`,
+      `организация: ${seat ? a.organizationName || '—' : 'личная'}`].filter(Boolean).join(' · ');
+    return { org: a.organizationUuid, line, short: plan.replace(/^Claude\s+/i, '').split(' ')[0] };
+  }
+  if (!a.workspaceRole) return null;
+  return { org: a.organizationUuid, line: `биллинг: Console · оплата: по токенам · организация: ${a.organizationName || '—'}`, short: 'токены' };
+}
+
+// История входов: новая запись, когда вход сменился. Ход получает вход своей организации, действовавший в его время,
+// а ход старше истории — самый ранний вход той же организации.
+function logins(now) {
+  const file = path.join(cacheDir(), 'logins.json');
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* первый тик */ }
+  const current = currentLogin();
+  const last = list[list.length - 1];
+  if (current && (!last || last.org !== current.org || last.line !== current.line)) {
+    list.push({ at: now, ...current });
+    if (STORE) fs.writeFileSync(file, JSON.stringify(list));
+  }
+  return { list, current };
+}
+
+const latest = (marks, at) => (marks.filter((x) => x.at <= at).pop() || marks[0]) ?? null;
+
 function build(currentDir) {
   const threads = [];
   // Модель, которой нет в таблице цен, считается по нулям — панель должна сказать об этом вслух.
@@ -297,6 +336,15 @@ function build(currentDir) {
     }
   }
   threads.sort((a, b) => (a.lastAt < b.lastAt ? 1 : -1));
+  const { list, current: login } = logins(new Date().toISOString());
+  for (const t of threads) {
+    for (const turn of t.turns) {
+      const org = t.orgs && latest(t.orgs, turn.at);
+      const hit = org && latest(list.filter((x) => x.org === org.org), turn.at);
+      if (hit) turn.account = { line: hit.line, short: hit.short };
+    }
+    delete t.orgs;
+  }
   // A project is named by its own root, not by whichever folder a session wandered
   // into: the client builds the journal directory name from the root path, so the
   // cwd that names it is the root. Threads of one project share it.
@@ -314,6 +362,7 @@ function build(currentDir) {
     current,
     currentLabel: label(current, (threads.find((t) => t.project === current) || {}).dir),
     unpriced,
+    account: login ? { line: login.line, short: login.short } : null,
     threads: threads.map((t) => ({
       ...t, usd: sumModels({ x: t.totals }).usd, projectLabel: label(t.project, t.dir),
     })),

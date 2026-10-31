@@ -47,9 +47,9 @@
   .rows {
     display: grid; width: max-content; min-width: 100%;
     grid-template-columns:
-      max-content var(--w-name) repeat(8, max-content) max-content;
+      max-content var(--w-name) repeat(9, max-content) max-content;
   }
-  .rows.with-input { grid-template-columns: max-content var(--w-name) repeat(9, max-content) max-content; }
+  .rows.with-input { grid-template-columns: max-content var(--w-name) repeat(10, max-content) max-content; }
 
   /* Cells sit inside the rows, and a row with display:contents passes on nothing
      but inherited properties — so padding and borders belong to the cells. Cells
@@ -114,6 +114,7 @@
      края, без вертикальных разделителей, которые иначе торчали бы выше шапки. */
   .gr { grid-column: 1 / -1; padding: 18px 0 7px; font-weight: 700; font-size: 1.2em; }
   .rows > .gr:first-child { padding-top: 4px; }
+  .gr .acct { font-weight: 400; font-size: .75em; color: var(--vscode-descriptionForeground); }
   /* Тот же воздух, что между проектами, — чтобы общий итог не читался как часть
      последней группы. */
   .gap { grid-column: 1 / -1; height: 14px; }
@@ -179,7 +180,7 @@ const ARTICLES = [
   ['размышления', 'thinking', 'usdThinking'],
   ['свежий вход', 'input', 'usdInput'],
 ];
-const HEAD = ['', 'название треда', 'траты', 'дата', 'кеш до/вход', 'модель', 'чтение', 'запись', 'генерация', 'размышления', 'свежий вход', 'стол'];
+const HEAD = ['', 'название треда', 'траты', 'дата', 'кеш до/вход', 'модель', 'чтение', 'запись', 'генерация', 'размышления', 'свежий вход', 'оплата', 'стол'];
 const INPUT_MIN = 1000;
 const DASH = '<span class="num">—</span>';
 let state = { threads: [] };
@@ -379,6 +380,7 @@ function totalsRow(total, label, grand) {
     <span class="sum">${usd(total.usd)}</span>
     ${DASH}${DASH}${DASH}
     ${articleCells(sum)}
+    ${DASH}
     <span class="col-table num">—</span>
   </div>`;
 }
@@ -387,14 +389,21 @@ function totalsRow(total, label, grand) {
 // того, показан ли «свежий вход».
 const cols = () => HEAD.length - (showInput ? 0 : 1);
 
-function groupRow(name) {
-  return `<div class="gr"><span>${esc(name)}</span></div>`;
+// Строка входа стоит у верхнего названия проекта: чем оплачивается работа сейчас.
+function groupRow(name, account) {
+  return `<div class="gr"><span>${esc(name)}</span>${account ? `<span class="acct"> · ${esc(account.line)}</span>` : ''}</div>`;
 }
+
+// Чем оплачивались ходы выборки, по порядку: у треда, где вход сменился, оба способа.
+const payCell = (turns) => {
+  const ways = [...new Set(turns.map((x) => x.account && x.account.short).filter(Boolean))];
+  return ways.length ? `<span class="muted">${esc(ways.join(', '))}</span>` : DASH;
+};
 
 function headerRow() {
   return `<div class="hr">${HEAD.map((h, i) => {
     if (i === 10 && !showInput) return '';
-    const cls = i === 11 ? ' class="col-table"' : i === 2 ? ' class="sum"' : '';
+    const cls = i === 12 ? ' class="col-table"' : i === 2 ? ' class="sum"' : '';
     return `<span${cls}>${h}</span>`;
   }).join('')}</div>`;
 }
@@ -428,9 +437,9 @@ function render() {
   const withHeads = true;
   // Every group carries its own column titles. They are identical and all stick to
   // the top, so the next one covers the previous and exactly one is ever visible.
-  const html = [...groups.entries()].map(([name, list]) => {
+  const html = [...groups.entries()].map(([name, list], g) => {
     const title = name || state.currentLabel || 'проект';
-    const head = (withHeads ? groupRow(title) : '') + headerRow();
+    const head = (withHeads ? groupRow(title, g === 0 ? state.account : null) : '') + headerRow();
     return head + list.map(threadRows).join('') + totalsRow(sumOf(list), `Итого · ${title}`);
   }).join('');
   // Общий итог отделён от последней группы тем же воздухом, что стоит между
@@ -476,6 +485,7 @@ function threadRows(t) {
     ${cacheCell(top, current)}
     ${DASH}
     ${articleCells(t.window.sum)}
+    ${payCell(t.window.turns)}
     ${tableCell(tableNow, limitTokens)}
   </div>`;
 
@@ -502,6 +512,7 @@ function threadRows(t) {
     ${DASH}
     <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
     ${articleCells(shape(x.totals, x.missTokens), missTip(x.missReasons))}
+    ${payCell([x])}
     ${tableCell(x.table, x.compactAt || limitTokens)}
   </div>` + (shown ? `<div class="qt">${body}</div>` : '');
   }).join('');
