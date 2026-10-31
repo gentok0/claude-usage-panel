@@ -11,6 +11,8 @@
 //   node usage-query.mjs --days 7 --misses            промахи кэша и их цена
 //   node usage-query.mjs --days 7 --tool-inputs --by tool   во что обходятся входы вызовов: генерация и перечитывание, оценка
 //   node usage-query.mjs --search "кеш" --by thread   только ходы с фразой
+//   node usage-query.mjs --project all --days 60 --by window --over 148,263   пятичасовые окна подписки и сколько из них дороже порогов
+//   node usage-query.mjs --project all --days 60 --by week --week-start 2026-10-27T10:00   недели от сброса лимита и худшие 7 дней подряд
 //   --project all       все проекты (по умолчанию — текущий)
 //   --from 2026-09-05 --to 2026-09-11   свои границы вместо --days
 //   --json              машинный вывод
@@ -103,6 +105,7 @@ const project = PROJECT === 'all' ? null : (PROJECT || data.current);
 
 const groups = new Map();
 const grand = emptyBucket();
+const timed = [];
 for (const thread of data.threads) {
   if (project && thread.project !== project) continue;
   const titleHit = SEARCH && flat(thread.title || '').includes(SEARCH);
@@ -111,6 +114,7 @@ for (const thread of data.threads) {
     if (!(at >= from && at <= to)) continue;
     if (SEARCH && !titleHit && !flat(said(turn)).includes(SEARCH)) continue;
     if (!turn.requests) continue;
+    if (BY === 'window' || BY === 'week') { timed.push({ at, turn }); bucketAdd(grand, turn); continue; }
 
     // Ключ разреза. «Инструменты» раскладывают один ход по нескольким ключам, поэтому
     // считаются отдельно: приписывать ходу цену одного инструмента нельзя.
@@ -132,8 +136,33 @@ for (const thread of data.threads) {
   }
 }
 
+// Пятичасовое окно подписки открывает первый ход после конца прошлого. Недельное сбрасывается в закреплённое за
+// аккаунтом время, которого журналы не знают: неделя отсчитывается от --week-start, по умолчанию с понедельника.
+const two = (n) => String(n).padStart(2, '0');
+const stamp = (ms) => { const d = new Date(ms); return `${two(d.getDate())}.${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+if (timed.length) {
+  timed.sort((a, b) => a.at - b.at);
+  const len = BY === 'window' ? 5 * 3600e3 : 7 * 86400e3;
+  const anchor = new Date(arg('--week-start', '2026-01-05T00:00')).getTime();
+  if (Number.isNaN(anchor)) {
+    console.error('--week-start: нужна дата и время сброса недельного лимита, например 2026-10-27T10:00');
+    process.exit(1);
+  }
+  let span = null;
+  for (const { at, turn } of timed) {
+    if (!span || at >= span.end) {
+      const start = BY === 'window' ? at : anchor + Math.floor((at - anchor) / len) * len;
+      span = { end: start + len, key: `${stamp(start)} – ${stamp(start + len)}` };
+      groups.set(span.key, emptyBucket());
+    }
+    bucketAdd(groups.get(span.key), turn);
+  }
+}
+
 const weight = (v) => (INPUTS ? v.inputs.usd + v.inputs.rereadUsd : v.usd);
-const rows = [...groups.entries()].sort((a, b) => (BY === 'day' ? (a[0] < b[0] ? 1 : -1) : weight(b[1]) - weight(a[1])));
+// Окна и недели — по времени, свежие сверху, как дни.
+const rows = timed.length ? [...groups.entries()].reverse()
+  : [...groups.entries()].sort((a, b) => (BY === 'day' ? (a[0] < b[0] ? 1 : -1) : weight(b[1]) - weight(a[1])));
 const shown = TOP ? rows.slice(0, TOP) : rows;
 
 if (has('--json')) {
@@ -184,6 +213,25 @@ if (INPUTS) {
   }
   const gs = shape(grand.totals, grand.missTokens, grand.missUsd);
   console.log(`${pad('ИТОГО', width)} ${padL(fmtUsd(grand.usd), 9)} ${padL(grand.turns, 6)} ${articles.map((a) => padL(`${fmtTokens(gs[a][0])}/${fmtUsd(gs[a][1])}`, 15)).join('')}`);
+}
+
+if (timed.length) {
+  const sums = rows.map(([, v]) => v.usd).sort((a, b) => a - b);
+  const share = (q) => fmtUsd(sums[Math.min(sums.length - 1, Math.floor(sums.length * q))]);
+  const [topKey, top] = rows.reduce((m, r) => (r[1].usd > m[1].usd ? r : m));
+  const over = String(arg('--over', '')).split(',').filter(Boolean).map((x) => `дороже $${x}: ${sums.filter((s) => s > Number(x)).length}`);
+  console.log(`\n${BY === 'window' ? 'окон' : 'недель'} ${rows.length} · медиана ${share(0.5)} · 90 % не дороже ${share(0.9)} · самое дорогое ${fmtUsd(top.usd)} (${topKey})${over.map((s) => ` · ${s}`).join('')}`);
+  if (BY === 'week') {
+    const WEEK = 7 * 86400e3;
+    let worst = { usd: 0, from: 0 };
+    for (let i = 0, j = 0, sum = 0; i < timed.length; i++) {
+      while (j < timed.length && timed[j].at < timed[i].at + WEEK) sum += timed[j++].turn.usd || 0;
+      if (sum > worst.usd) worst = { usd: sum, from: timed[i].at };
+      sum -= timed[i].turn.usd || 0;
+    }
+    console.log(`худшие 7 дней подряд: ${fmtUsd(worst.usd)} (${stamp(worst.from)} – ${stamp(worst.from + WEEK)})`);
+  }
+  if (project) console.log('лимиты подписки общие для всех проектов и машин, а здесь только один проект: для них нужен --project all');
 }
 
 console.log(`\nцены сверены ${PRICES_CHECKED}; промахи кеша входят в «запись кеша» и показаны отдельной статьёй.`);
