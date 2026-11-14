@@ -100,10 +100,37 @@ function newThread(project, id) {
   };
 }
 
+// Почему запрос не прочитал кэш. Сервер у длинной переписки почти всегда отвечает «unavailable», поэтому причина
+// собирается из журнала: модель, пауза до запроса и что клиент отправил заново. Клиент записывает каждый запрос:
+// сколько сообщений прошлого он оставил как было (keep) и что отправил после них (tail).
+const HOUR = 3600e3;
+const FIVE_MINUTES = 300e3;
+// Картинку, вырезанную из старой переписки, клиент заменяет текстом с этим началом.
+const MEDIA_CUT = '[media removed';
+const cutText = (b) => b?.type === 'text' && String(b.text || '').startsWith(MEDIA_CUT);
+const cutsMedia = (message) => (Array.isArray(message?.content) ? message.content : [])
+  .some((b) => cutText(b) || (b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(cutText)));
+
+function missCause(rec, prev, sent, cut) {
+  const said = rec.message.diagnostics?.cache_miss_reason?.type;
+  if (said === 'model_changed' || (prev && prev.model !== normalizeModel(rec.message.model))) return 'model';
+  const req = sent.get(rec.requestRef);
+  const at = req ? req.at : Date.parse(rec.timestamp);
+  if (said === 'previous_message_not_found' || (prev && at - prev.at > prev.ttl)) return prev?.ttl === HOUR ? 'pause-1h' : 'pause-5m';
+  const before = req && sent.get(req.base);
+  if (before && req.keep < before.keep + before.tail.length) return req.tail.some((h) => cut.has(h)) ? 'media' : 'history';
+  if (said === 'system_changed' || said === 'tools_changed') return 'setup';
+  return said === 'messages_changed' ? 'history' : 'unknown';
+}
+
 function readLog(file, thread, seen, unpriced) {
   const text = fs.readFileSync(file, 'utf8');
   const marks = senderMarks(text);
   let turn = null;
+  // Запросы клиента и вырезанные им картинки — для причины промаха; prev — прошлый запрос к модели.
+  const sent = new Map();
+  const cut = new Set();
+  let prev = null;
   let lastAnswer = '';
   let lastPrompt = '';
   const events = new Set();
@@ -125,6 +152,8 @@ function readLog(file, thread, seen, unpriced) {
     // journal directory is named after. Later records follow the shell around
     // subdirectories and would rename the project after whatever was entered last.
     if (rec.cwd && !thread.dir) thread.dir = rec.cwd;
+    if (rec.type === 'api-request') { sent.set(rec.id, { at: Date.parse(rec.timestamp), base: rec.base, keep: rec.keep ?? 0, tail: rec.tail || [] }); continue; }
+    if (rec.type === 'api-request-blob') { if (cutsMedia(rec.message)) cut.add(rec.hash); continue; }
 
     // A message sent while the model is still working does not open a turn: the
     // client folds it into the running one, and the requests after it stay there.
@@ -232,9 +261,15 @@ function readLog(file, thread, seen, unpriced) {
       slot.usd += priced.usd;
     }
     turn.missTokens += miss;
-    // Причину промаха называет сервер; панель показывает её подсказкой у промаха запроса.
-    const reason = miss ? rec.message.diagnostics?.cache_miss_reason : null;
-    if (reason) (turn.missReasons ||= []).push(reason);
+    // Причины промахов хода панель показывает подсказкой у промаха запроса.
+    if (miss) {
+      const slot = ((turn.missCauses ||= {})[missCause(rec, prev, sent, cut)] ||= { count: 0, tokens: 0 });
+      slot.count += 1;
+      slot.tokens += miss;
+    }
+    // Срок кэша задаёт последняя запись: чтение продлевает его, не меняя.
+    const ttl = u.cache_creation?.ephemeral_1h_input_tokens ? HOUR : u.cache_creation_input_tokens ? FIVE_MINUTES : prev?.ttl ?? FIVE_MINUTES;
+    prev = { model: normalizeModel(rec.message.model), at: Date.parse(rec.timestamp), ttl };
     turn.model = rec.message.model || turn.model;
     turn.effort = rec.effort || turn.effort;
     turn.geo = u.inference_geo || turn.geo;

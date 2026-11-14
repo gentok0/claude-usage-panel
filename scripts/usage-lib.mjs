@@ -203,6 +203,17 @@ export function missUsdOf(totals, missTokens) {
   return missTokens * (write - read);
 }
 
+// Причины промаха кэша, которые называет сборщик; панель держит у себя те же слова.
+export const MISS_CAUSES = {
+  media: 'клиент вырезал старые картинки',
+  history: 'клиент изменил старую переписку',
+  'pause-5m': 'пауза дольше 5 минут — кэш истёк',
+  'pause-1h': 'пауза дольше часа — кэш истёк',
+  model: 'сменилась модель',
+  setup: 'изменился системный промпт или инструменты',
+  unknown: 'причина не определена',
+};
+
 // Scan JSONL text, deduplicating by requestId; seen is a Set carried across calls.
 // Returns the last priced record so callers can show the cost of one request.
 export function scanTranscript(text, seen, byModel, ctx) {

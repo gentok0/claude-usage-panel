@@ -255,7 +255,17 @@ function missUsdOf(t, missTokens) {
   return missTokens * (write - read);
 }
 
-// Причину промаха называет сервер; незнакомый тип показывается как есть.
+// Причины промаха называет сборщик теми же словами, что запрос к данным; незнакомая показывается как есть.
+const MISS_CAUSES = {
+  media: 'клиент вырезал старые картинки',
+  history: 'клиент изменил старую переписку',
+  'pause-5m': 'пауза дольше 5 минут — кэш истёк',
+  'pause-1h': 'пауза дольше часа — кэш истёк',
+  model: 'сменилась модель',
+  setup: 'изменился системный промпт или инструменты',
+  unknown: 'причина не определена',
+};
+// У ходов, собранных до разбора причин, в архиве осталась только причина сервера.
 const MISS_REASONS = {
   previous_message_not_found: 'в кэше не найдено предыдущее сообщение',
   model_changed: 'сменилась модель',
@@ -264,7 +274,13 @@ const MISS_REASONS = {
   tools_changed: 'изменились инструменты',
   unavailable: 'причина недоступна',
 };
-function missTip(reasons) {
+function missTip(turn) {
+  if (turn.missCauses) {
+    const lines = Object.entries(turn.missCauses).sort((a, b) => b[1].tokens - a[1].tokens)
+      .map(([k, c]) => `${c.count} × ${MISS_CAUSES[k] || k} — ${usd(missUsdOf(turn.totals, c.tokens))}`);
+    return ['промахи кэша в этом запросе:', ...lines].join('\n');
+  }
+  const reasons = turn.missReasons;
   if (!reasons || !reasons.length) return '';
   const lines = reasons.map((r) => (MISS_REASONS[r.type] || r.type)
     + (r.cache_missed_input_tokens ? ` — ${tok(r.cache_missed_input_tokens)} токенов` : ''));
@@ -511,7 +527,7 @@ function threadRows(t) {
     <span class="muted">${when(x.at)}</span>
     ${DASH}
     <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
-    ${articleCells(shape(x.totals, x.missTokens), missTip(x.missReasons))}
+    ${articleCells(shape(x.totals, x.missTokens), missTip(x))}
     ${payCell([x])}
     ${tableCell(x.table, x.compactAt || limitTokens)}
   </div>` + (shown ? `<div class="qt">${body}</div>` : '');

@@ -20,7 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { cacheDir, emptyTotals, addTotals, fmtTokens, fmtUsd, missUsdOf, PRICES_CHECKED } from './usage-lib.mjs';
+import { cacheDir, emptyTotals, addTotals, fmtTokens, fmtUsd, missUsdOf, MISS_CAUSES, PRICES_CHECKED } from './usage-lib.mjs';
 import { readArchive, mergeThreads } from './archive.mjs';
 
 const argv = process.argv.slice(2);
@@ -81,13 +81,19 @@ function shape(t, missTokens, missUsd) {
   };
 }
 
-const emptyBucket = () => ({ totals: emptyTotals(), missTokens: 0, missUsd: 0, usd: 0, turns: 0, requests: 0, tools: {},
+const emptyBucket = () => ({ totals: emptyTotals(), missTokens: 0, missUsd: 0, causes: {}, usd: 0, turns: 0, requests: 0, tools: {},
   inputs: { tokens: 0, usd: 0, rereadTokens: 0, rereadUsd: 0 } });
 
 function bucketAdd(b, turn, tool) {
   addTotals(b.totals, turn.totals);
   b.missTokens += turn.missTokens || 0;
   b.missUsd += missUsdOf(turn.totals, turn.missTokens || 0);
+  for (const [k, c] of Object.entries(turn.missCauses || {})) {
+    const slot = (b.causes[k] ||= { count: 0, tokens: 0, usd: 0 });
+    slot.count += c.count;
+    slot.tokens += c.tokens;
+    slot.usd += missUsdOf(turn.totals, c.tokens);
+  }
   b.usd += turn.usd || 0;
   b.turns += 1;
   b.requests += turn.requests || 0;
@@ -203,6 +209,12 @@ if (INPUTS) {
     console.log(`${pad(k, width)} ${padL(fmtTokens(v.missTokens), 13)} ${padL(fmtUsd(v.missUsd), 8)} ${padL(withMiss ? 'есть' : '—', 11)}`);
   }
   console.log(`\nвсего перезаписано ${fmtTokens(grand.missTokens)} = ${fmtUsd(grand.missUsd)} (ставка записи минус ставка чтения модели хода)`);
+  // У ходов, собранных до разбора причин, причины нет: остаток назван отдельно, чтобы части сходились с целым.
+  const causes = Object.entries(grand.causes).sort((a, b) => b[1].usd - a[1].usd);
+  const rest = grand.missTokens - causes.reduce((s, [, c]) => s + c.tokens, 0);
+  const parts = causes.map(([k, c]) => `${MISS_CAUSES[k] || k} — ${c.count} раз, ${fmtTokens(c.tokens)} = ${fmtUsd(c.usd)}`);
+  if (rest > 0) parts.push(`причина не записана — ${fmtTokens(rest)}`);
+  if (causes.length) console.log(`по причинам: ${parts.join('; ')}`);
 } else {
   const articles = Object.keys(shape(emptyTotals(), 0));
   console.log(`${pad(BY, width)} ${padL('$', 9)} ${padL('ходов', 6)} ${articles.map((a) => padL(a, 15)).join('')}`);
