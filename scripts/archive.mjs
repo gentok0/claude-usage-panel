@@ -16,6 +16,13 @@ const META = ['project', 'projectLabel', 'title', 'dir', 'firstAt', 'lastAt',
 const MONTH_FILE = /^\d{4}-\d{2}\.json$/;
 const byTime = (a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
 
+// Читатель видит файл либо прежним, либо новым целиком: сборщики разных тредов пишут одни и те же файлы одновременно.
+export function writeAtomic(file, text) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
 export function archiveDir() {
   const dir = path.join(cacheDir(), 'archive');
   fs.mkdirSync(dir, { recursive: true });
@@ -96,7 +103,7 @@ export function updateArchive(data, dir = archiveDir()) {
     stats.turns += threads.reduce((a, t) => a + t.turns.length, 0);
     stats.bytes += Buffer.byteLength(text);
     if (text !== before) {
-      fs.writeFileSync(file, text);
+      writeAtomic(file, text);
       stats.written += 1;
     }
   }

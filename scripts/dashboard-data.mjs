@@ -9,7 +9,7 @@ import {
   cacheDir, emptyTotals, addTotals, scanTranscript, sumModels, isRealRequest, normalizeModel,
   priceRecord, PRICES, senderMarks, sentByPerson, namesJournalDir,
 } from './usage-lib.mjs';
-import { updateArchive } from './archive.mjs';
+import { updateArchive, writeAtomic } from './archive.mjs';
 import { attachmentsOf, saveAttachments } from './attachments.mjs';
 
 const PROJECTS = path.join(os.homedir(), '.claude', 'projects');
@@ -133,6 +133,7 @@ function readLog(file, thread, seen, unpriced) {
   let prev = null;
   let lastAnswer = '';
   let lastPrompt = '';
+  let named = '';
   const events = new Set();
   const asks = new Map();
   for (const line of text.split('\n')) {
@@ -143,6 +144,8 @@ function readLog(file, thread, seen, unpriced) {
     if (rec.uuid && events.has(rec.uuid)) continue;
     if (rec.uuid) events.add(rec.uuid);
 
+    // Имя, данное треду при запуске или переименовании, VS Code ставит выше придуманного клиентом — панель так же.
+    if (rec.customTitle) named = rec.customTitle;
     if (rec.aiTitle) thread.title = rec.aiTitle;
     // Под чьим входом шла работа: по организации ход потом находит строку входа.
     if (rec.attachment?.type === 'credential_org') (thread.orgs ||= []).push({ at: rec.timestamp, org: rec.attachment.organizationUuid });
@@ -295,7 +298,7 @@ function readLog(file, thread, seen, unpriced) {
       genUsd: priced.output ? (priced.usdOutput * (priced.output - priced.thinking)) / priced.output : 0,
       readRate: known ? cost({ cache_read_input_tokens: 1e6 }) / 1e6 : 0 });
   }
-  if (!thread.title) thread.title = lastPrompt;
+  thread.title = named || thread.title || lastPrompt;
   // Входы вызовов — оценка: клиент не сообщает, сколько токенов ушло на них. Генерация запроса без размышлений
   // делится с текстом ответа по доле символов; перечитывание — те же токены в каждом следующем запросе треда по ставке чтения кэша.
   for (const ask of asks.values()) {
@@ -351,11 +354,26 @@ function logins(now) {
 
 const latest = (marks, at) => (marks.filter((x) => x.at <= at).pop() || marks[0]) ?? null;
 
+// Разбор журнала зависит от кода сборщика и от цен: сменилось что-то из них — прежний кэш не годится.
+const PARSER = JSON.stringify([
+  ['dashboard-data.mjs', 'usage-lib.mjs', 'attachments.mjs'].map((f) => fs.statSync(new URL(f, import.meta.url)).mtimeMs),
+  PRICES,
+]);
+
 function build(currentDir) {
   const threads = [];
   // Модель, которой нет в таблице цен, считается по нулям — панель должна сказать об этом вслух.
   const unpriced = {};
   const current = path.basename(currentDir);
+  // Журнал только дописывается, поэтому разобранный тред годен, пока у файла прежние размер и время записи:
+  // разбор всех журналов шёл секунды на каждом событии, а меняются обычно один-два открытых треда.
+  const cacheFile = path.join(cacheDir(), 'journals.json');
+  let before = {};
+  try {
+    const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (cached.parser === PARSER) before = cached.files;
+  } catch { /* первый тик */ }
+  const parsed = {};
   for (const project of fs.readdirSync(PROJECTS)) {
     // Сверка ставок работает во временной папке и удаляет свой журнал за собой,
     // но тик сборщика может успеть между запросом и уборкой — тогда пробная сессия
@@ -365,10 +383,24 @@ function build(currentDir) {
     let entries = [];
     try { entries = fs.readdirSync(dir); } catch { continue; }
     for (const name of entries.filter((n) => n.endsWith('.jsonl'))) {
-      const thread = newThread(project, name.slice(0, -6));
-      try { readLog(path.join(dir, name), thread, new Set(), unpriced); } catch { continue; }
-      if (thread.requests) threads.push(thread);
+      const file = path.join(dir, name);
+      let stat;
+      try { stat = fs.statSync(file); } catch { continue; }
+      let entry = before[file];
+      if (!entry || entry.size !== stat.size || entry.mtimeMs !== stat.mtimeMs) {
+        const thread = newThread(project, name.slice(0, -6));
+        const models = {};
+        try { readLog(file, thread, new Set(), models); } catch { continue; }
+        entry = { size: stat.size, mtimeMs: stat.mtimeMs, thread, unpriced: models };
+      }
+      parsed[file] = entry;
     }
+  }
+  // Снимок разбора пишется до того, как ниже ходы получат вход, а треды потеряют список организаций.
+  if (STORE) writeAtomic(cacheFile, JSON.stringify({ parser: PARSER, files: parsed }));
+  for (const { thread, unpriced: models } of Object.values(parsed)) {
+    for (const [model, n] of Object.entries(models)) unpriced[model] = (unpriced[model] || 0) + n;
+    if (thread.requests) threads.push(thread);
   }
   threads.sort((a, b) => (a.lastAt < b.lastAt ? 1 : -1));
   const { list, current: login } = logins(new Date().toISOString());
@@ -435,7 +467,7 @@ const data = build(dir);
 // The hook's cwd follows the shell into subfolders, so it names the project only
 // when the journals gave no root of their own.
 if (currentCwd && !data.currentLabel) data.currentLabel = path.basename(currentCwd);
-fs.writeFileSync(out, JSON.stringify(data));
+writeAtomic(out, JSON.stringify(data));
 const stats = STORE ? updateArchive(data) : null;
 if (process.argv.includes('--print')) {
   const usd = data.threads.reduce((a, t) => a + t.usd, 0);
