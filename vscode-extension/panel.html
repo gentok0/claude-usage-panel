@@ -226,7 +226,7 @@ const SPIN = '<span class="spin" title="идёт ход"></span>';
 function going(at) {
   const m = Math.max(0, Math.floor((Date.now() - new Date(at).getTime()) / 60e3));
   const text = m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${p2(m % 60)} мин`;
-  return `<span class="going" title="ход идёт с ${when(at)}">идёт ${text}</span>`;
+  return `<span class="going" title="ход идёт с ${when(at)}">${text}</span>`;
 }
 
 function renderAlert(unpriced) {
