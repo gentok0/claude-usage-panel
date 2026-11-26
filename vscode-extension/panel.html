@@ -149,6 +149,14 @@
   .more { grid-column: 2 / -1; padding: 5px .9ch 9px; }
   .more button { font: inherit; color: var(--vscode-textLink-foreground); background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; }
   .empty { padding: 12px 0; color: var(--vscode-descriptionForeground); }
+  /* Идущий ход: кольцо перед названием, а в колонке даты — сколько ход уже идёт. */
+  .spin {
+    display: inline-block; box-sizing: border-box; width: .8em; height: .8em; margin-right: .7ch; vertical-align: -.08em;
+    border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .going { color: var(--accent); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -198,6 +206,9 @@ let query = '';
 let showInput = false;
 const open = new Set();
 const expanded = new Set();
+// Треды, где сейчас идёт ход: их называет расширение.
+let busy = new Set();
+let tickTimer = 0;
 
 const usd = (n) => '$' + (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2));
 const tok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K' : String(n);
@@ -208,6 +219,15 @@ const requestsWord = (n) => {
   const d = n % 10, h = n % 100;
   return d === 1 && h !== 11 ? 'запрос' : d >= 2 && d <= 4 && (h < 12 || h > 14) ? 'запроса' : 'запросов';
 };
+
+// Идущий ход — последнее сообщение треда, чей процесс клиент держит занятым.
+const runningAt = (t) => (busy.has(t.id) && t.turns.reduce((a, x) => (x.at > a ? x.at : a), '')) || null;
+const SPIN = '<span class="spin" title="идёт ход"></span>';
+function going(at) {
+  const m = Math.max(0, Math.floor((Date.now() - new Date(at).getTime()) / 60e3));
+  const text = m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${p2(m % 60)} мин`;
+  return `<span class="going" title="ход идёт с ${when(at)}">идёт ${text}</span>`;
+}
 
 function renderAlert(unpriced) {
   const list = Object.entries(unpriced || {});
@@ -472,6 +492,9 @@ function render() {
   const ends = threads.map((t) => freshTurn(t.window.turns)).filter(Boolean).map(cacheEnd).filter((e) => e > now);
   clearTimeout(flipTimer);
   if (ends.length) flipTimer = setTimeout(render, Math.min(...ends) - now + 1000);
+  // Время хода растёт и без новых данных.
+  clearTimeout(tickTimer);
+  if (busy.size) tickTimer = setTimeout(render, 30e3);
 }
 
 function threadRows(t) {
@@ -492,12 +515,13 @@ function threadRows(t) {
   // Срок кэша — тоже состояние выборки, а цена входа — только нынешнего хода треда:
   // у старого хода из поиска она не значит ничего.
   const current = Boolean(top) && top.at === (freshTurn(t.turns) || {}).at;
+  const run = runningAt(t);
 
   const head = `<div class="tr" data-id="${t.id}">
     <span class="caret muted">${isOpen ? '▾' : '▸'}</span>
-    <span class="name" title="${esc(threadName(t))}">${esc(threadName(t))}</span>
+    <span class="name" title="${esc(threadName(t))}">${run ? SPIN : ''}${esc(threadName(t))}</span>
     <span class="sum">${usd(t.window.usd)}</span>
-    <span class="muted">${when(at)}</span>
+    ${run ? going(run) : `<span class="muted">${when(at)}</span>`}
     ${cacheCell(top, current)}
     ${DASH}
     ${articleCells(t.window.sum)}
@@ -522,9 +546,9 @@ function threadRows(t) {
     const body = attached + esc(x.full || x.text) + later.map((f) => `\n\n<span class="qf">${esc(f.mark)}</span>\n${esc(f.text)}`).join('');
     return `<div class="qr ${i === 0 ? 'first' : ''}">
     <span></span>
-    <span class="name${shown ? ' open' : ''}" data-turn="${esc(key)}"${tip}><span class="clip">${esc(x.text)}</span></span>
+    <span class="name${shown ? ' open' : ''}" data-turn="${esc(key)}"${tip}><span class="clip">${x.at === run ? SPIN : ''}${esc(x.text)}</span></span>
     <span class="sum">${usd(x.usd)}</span>
-    <span class="muted">${when(x.at)}</span>
+    ${x.at === run ? going(run) : `<span class="muted">${when(x.at)}</span>`}
     ${DASH}
     <span class="muted">${esc((x.model || '').replace('claude-', ''))} ${esc(x.effort || '')}</span>
     ${articleCells(shape(x.totals, x.missTokens), missTip(x))}
@@ -570,6 +594,7 @@ document.addEventListener('click', (e) => {
 
 window.addEventListener('message', (e) => {
   const m = e.data;
+  if (m && m.kind === 'busy') { busy = new Set(m.ids || []); render(); return; }
   if (m && m.kind === 'archive') archive = m.threads || [];
   else state = (m && m.kind === 'live' ? m.data : m) || { threads: [] };
   merged = null;
